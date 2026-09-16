@@ -1,9 +1,13 @@
 name: Release
 
+# Fork release. A tag v<upstream tag>-kts.<n> (e.g. v0.1.2.1-kts.1) pushed on
+# the kts/<upstream tag> branch publishes
+# ghcr.io/aikts/guardrails-llm-filter:<that tag>. Upstream tags (plain v*)
+# are not released from the fork.
 on:
   push:
     tags:
-      - "v*"
+      - "v*-kts.*"
 
 permissions:
   contents: read
@@ -22,15 +26,22 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      # The fork's tags are not semver (a four-part upstream version plus the
+      # -kts.<n> suffix), so type=semver cannot parse them. The image gets the
+      # git tag verbatim and nothing else: no floating tags, no latest.
       - name: Derive image metadata
         id: meta
         uses: docker/metadata-action@v6
         with:
           images: ghcr.io/${{ github.repository }}
           tags: |
-            type=semver,pattern={{version}}
-            type=semver,pattern={{major}}.{{minor}}
-            type=raw,value=latest
+            type=ref,event=tag
+          flavor: |
+            latest=false
+
+      - name: Build identity
+        id: build
+        run: echo "commit=${GITHUB_SHA::7}" >> "$GITHUB_OUTPUT"
 
       - uses: docker/setup-buildx-action@v4
 
@@ -41,3 +52,8 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          # Surfaced by GET /v1/version.
+          build-args: |
+            VERSION=${{ github.ref_name }}
+            COMMIT=${{ steps.build.outputs.commit }}
+            DATE=${{ fromJSON(steps.meta.outputs.json).labels['org.opencontainers.image.created'] }}

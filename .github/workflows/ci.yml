@@ -2,7 +2,8 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    # kts/<upstream tag>: the fork's patch stacks (see README).
+    branches: [main, "kts/**"]
   pull_request:
 
 jobs:
