@@ -69,6 +69,17 @@ func (h *Handler) forward(
 		http.Error(w, "failed to build upstream request", http.StatusBadGateway)
 		return
 	}
+	// Never replay the request. NewRequestWithContext sets GetBody for a
+	// *bytes.Reader, and with a client Idempotency-Key / X-Idempotency-Key
+	// header (copied below) net/http then treats the POST as replayable: when a
+	// reused keep-alive connection breaks after the request was written, it
+	// sends the request again on a new connection. For an LLM call that is a
+	// second model invocation and a second charge, while the first may still be
+	// running. Without GetBody the failure goes to the client instead, exactly
+	// as through httputil.ReverseProxy; the cost is that the transport does not
+	// retry even a request the upstream provably never processed (a stale idle
+	// connection, an HTTP/2 GOAWAY) — the client sees that error too.
+	outReq.GetBody = nil
 	copyHeaders(outReq.Header, r.Header)
 	removeHopByHop(outReq.Header)
 	// The override header is consumed by this service; never forward it.

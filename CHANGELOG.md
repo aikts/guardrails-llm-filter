@@ -69,6 +69,14 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The data plane no longer sends a request to the upstream twice. With a
+  client `Idempotency-Key` / `X-Idempotency-Key` header, net/http replayed a
+  request whose reused keep-alive connection broke after the request was
+  written — for an LLM call, a second model invocation (and charge) while the
+  first could still be running. The upstream request is now built without
+  `GetBody`, as `httputil.ReverseProxy` does: the transport retries nothing,
+  so such failures reach the client as 502, and a 307/308 from the upstream is
+  relayed instead of followed.
 - Anthropic `/v1/messages` requests: `tool_use.input` is now masked per decoded
   string leaf. Previously the raw JSON object text was regex-scanned: PII
   containing quotes/backslashes/escapes could be missed entirely, and when a
