@@ -98,6 +98,24 @@ func TestLoadListenAddr(t *testing.T) {
 	assert.Equal(t, ":9999", cfg.ListenAddr)
 }
 
+func TestLoadResponseHeadersDefaults(t *testing.T) {
+	cfg, err := config.Load()
+	require.NoError(t, err)
+	assert.Equal(t, config.GuardrailsHeaders{
+		DataTypesHeader:         "x-guardrails-data-types-triggered",
+		TriggeredRulesHeader:    "x-guardrails-triggered-rules",
+		ReplacementCountsHeader: "x-guardrails-replacement-counts",
+		ExposeTriggeredRules:    false,
+	}, cfg.GuardrailsHeaders)
+
+	t.Setenv("GUARDRAILS_HEADERS_EXPOSE_TRIGGERED_RULES", "true")
+	t.Setenv("GUARDRAILS_HEADERS_REPLACEMENT_COUNTS_HEADER", "x-counts")
+	cfg, err = config.Load()
+	require.NoError(t, err)
+	assert.True(t, cfg.GuardrailsHeaders.ExposeTriggeredRules)
+	assert.Equal(t, "x-counts", cfg.GuardrailsHeaders.ReplacementCountsHeader)
+}
+
 func TestLoadUpstreamDefaults(t *testing.T) {
 	cfg, err := config.Load()
 	require.NoError(t, err)

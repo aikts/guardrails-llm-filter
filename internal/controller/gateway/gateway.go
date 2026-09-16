@@ -173,6 +173,7 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	outBody := body
 	var factory *demask.Factory // non-nil ⇒ demask the response
 	var requestID string        // keys the audit record for response-phase enrichment
+	var triggered http.Header   // the masking outcome reported in the response headers
 
 	switch {
 	case maskable && len(body) > 0:
@@ -181,12 +182,13 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			outBody = masked
 			requestID = rid
 			factory = h.demaskerProvider.NewFactory(state)
+			triggered = h.triggeredHeaders(state)
 		}
 	case !guarded:
 		metrics.IncUnguardedPathPassthrough()
 	}
 
-	h.forward(ctx, w, r, outBody, factory, format, streamRequested, requestID)
+	h.forward(ctx, w, r, outBody, factory, format, streamRequested, requestID, triggered)
 }
 
 // effectiveSettings resolves the global policy, optionally narrowed by the

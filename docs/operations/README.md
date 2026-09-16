@@ -95,9 +95,17 @@ flowchart LR
 
 ## Заголовки ответа
 
-- `x-guardrails-data-types-triggered: 5,2` — когда маскирование сработало.
-- `x-guardrails-triggered-rules: pii.email,...` — только с
-  `GUARDRAILS_HEADERS_EXPOSE_TRIGGERED_RULES=true`.
+Только когда маскирование сработало:
+
+- `x-guardrails-data-types-triggered: 2,5` — сработавшие типы данных;
+- `x-guardrails-triggered-rules: pii.docs.inn-person,pii.fio-ru` — сработавшие правила,
+  только с `GUARDRAILS_HEADERS_EXPOSE_TRIGGERED_RULES=true`;
+- `x-guardrails-replacement-counts: pii.docs.inn-person=1,pii.fio-ru=2` — число различных
+  значений, заменённых каждым из этих правил, тоже только с этой опцией.
+
+Формат и семантика — в [architecture/request-lifecycle.md](../architecture/request-lifecycle.md#заголовки-ответа).
+Если к сервису ходят недоверенные клиенты, включайте опцию, только если им можно видеть
+сработавшие детекторы, — либо срезайте эти заголовки на фронтовом прокси.
 
 ## Деплой
 

@@ -17,6 +17,17 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   tuning via the other `GUARDRAILS_UPSTREAM_*` variables.
 - HTTP health endpoints `/healthz` (liveness) and `/readyz` (readiness) on the
   data-plane port, replacing the gRPC health service.
+- Masking-outcome response headers on the standalone data plane, in the
+  ext_proc variant's format and under its conditions: a response to a masked
+  request carries `x-guardrails-data-types-triggered`, and with
+  `GUARDRAILS_HEADERS_EXPOSE_TRIGGERED_RULES=true` also
+  `x-guardrails-triggered-rules` plus the new `x-guardrails-replacement-counts`
+  (`rule_id=count` for the same rules: distinct values each rule replaced; name
+  set by `GUARDRAILS_HEADERS_REPLACEMENT_COUNTS_HEADER`). They are set before
+  the body, so SSE responses carry them too. The standalone data plane
+  previously emitted none of these headers, although the configuration and docs
+  described them. Same-named headers from the upstream are not relayed: the
+  data-types one never, the rule ones while exposure is on.
 - Optional keyword pre-filter for the sensitive scanner
   (`GUARDRAILS_KEYWORD_PREFILTER_ENABLED`, off by default): skips a rule's regex
   when none of its `keywords` is present in the text. It is recall-preserving —

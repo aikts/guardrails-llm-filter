@@ -13,8 +13,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 
+	"github.com/cloud-ru-tech/guardrails-llm-filter/internal/config"
 	"github.com/cloud-ru-tech/guardrails-llm-filter/internal/controller/gateway"
 	"github.com/cloud-ru-tech/guardrails-llm-filter/internal/guardrails/demask"
+	"github.com/cloud-ru-tech/guardrails-llm-filter/internal/models"
 	"github.com/cloud-ru-tech/guardrails-llm-filter/internal/usecases/guardrails/mask"
 	"github.com/cloud-ru-tech/guardrails-llm-filter/pkg/guardrails/regex/registry"
 	"github.com/cloud-ru-tech/guardrails-llm-filter/pkg/guardrails/regex/rule"
@@ -123,10 +125,17 @@ func loadRealRegistryGW(t *testing.T) *registry.Registry {
 // upstreamURL, with the real masker and demasker (no fakes).
 func realGatewayHandler(t *testing.T, upstreamURL string) *gateway.Handler {
 	t.Helper()
+	return realGatewayHandlerWith(t, testConfig(upstreamURL), enforceSettings(), &fakeAudit{})
+}
+
+// realGatewayHandlerWith is realGatewayHandler with the config, global settings
+// and audit recorder chosen by the caller.
+func realGatewayHandlerWith(t *testing.T, cfg *config.Config, global models.GuardrailsSettings, audit gateway.AuditRecorder) *gateway.Handler {
+	t.Helper()
 	reg := loadRealRegistryGW(t)
 	masker := mask.New(mask.Deps{Registry: reg, Scanner: sensitive.New(reg)})
 	provider := demask.NewProvider(reg, placeholder.New(reg))
-	h, err := gateway.New(testConfig(upstreamURL), masker, &fakeSettings{global: enforceSettings()}, provider, &fakeAudit{})
+	h, err := gateway.New(cfg, masker, &fakeSettings{global: global}, provider, audit)
 	require.NoError(t, err)
 	return h
 }

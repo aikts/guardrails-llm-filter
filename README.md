@@ -290,7 +290,8 @@ alexen2/alrosait нет.</sub>
 | `GUARDRAILS_RULES_MAX_PATTERN_LEN` | `4096` | лимит длины regex кастомного правила; `0` отключает |
 | `GUARDRAILS_HEADERS_DATA_TYPES_HEADER` | `x-guardrails-data-types-triggered` | заголовок ответа со сработавшими типами данных |
 | `GUARDRAILS_HEADERS_TRIGGERED_RULES_HEADER` | `x-guardrails-triggered-rules` | заголовок ответа со сработавшими ID правил |
-| `GUARDRAILS_HEADERS_EXPOSE_TRIGGERED_RULES` | `false` | эмитить заголовок сработавших правил |
+| `GUARDRAILS_HEADERS_REPLACEMENT_COUNTS_HEADER` | `x-guardrails-replacement-counts` | заголовок ответа с числом замен по каждому сработавшему правилу (`rule_id=число`) |
+| `GUARDRAILS_HEADERS_EXPOSE_TRIGGERED_RULES` | `false` | эмитить заголовки сработавших правил и числа замен (opt-in: раскрывает детекторы) |
 | `GUARDRAILS_STORE_BACKEND` | `in_memory` | `in_memory` \| `redis` \| `postgres` — хранит кастомные правила, настройки и аудит (не masking state data-path, который в процессе) |
 | `GUARDRAILS_STORE_MASKING_TTL` | `15m` | страховочный TTL masking state (для межрепличного fallback); должен превышать самый длинный стриминговый ответ |
 | `GUARDRAILS_STORE_REDIS_ADDR` | `redis:6379` | адрес redis-бэкенда |

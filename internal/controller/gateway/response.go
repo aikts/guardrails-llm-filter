@@ -38,7 +38,11 @@ var hopByHopHeaders = []string{
 }
 
 // forward builds and issues the outbound request, then relays or demasks the
-// upstream response. When factory is nil the response is relayed verbatim.
+// upstream response. When factory is nil the response is relayed verbatim
+// (bar the outcome headers, see setTriggeredHeaders). triggered holds the
+// response headers that report the masking outcome (none when there is nothing
+// to report); they are set before the status line, so they reach the client
+// ahead of any body, streamed or not.
 func (h *Handler) forward(
 	ctx context.Context,
 	w http.ResponseWriter,
@@ -48,6 +52,7 @@ func (h *Handler) forward(
 	format models.APIFormat,
 	streamRequested bool,
 	requestID string,
+	triggered http.Header,
 ) {
 	target := h.upstreamURL(r)
 	if target == nil {
@@ -91,6 +96,7 @@ func (h *Handler) forward(
 
 	copyHeaders(w.Header(), resp.Header)
 	removeHopByHop(w.Header())
+	h.setTriggeredHeaders(w.Header(), triggered)
 
 	// No demasking: transparent relay of headers, status and body (with
 	// flushing, so an SSE passthrough still streams).

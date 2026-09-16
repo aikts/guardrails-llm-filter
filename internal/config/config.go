@@ -256,13 +256,20 @@ type StoreRedis struct {
 	DB       int    `env:"DB" envDefault:"0"`
 }
 
+// GuardrailsHeaders names the response headers that report a masked request's
+// outcome to the client. An empty name leaves that header out.
 type GuardrailsHeaders struct {
-	DataTypesHeader      string `env:"DATA_TYPES_HEADER" envDefault:"x-guardrails-data-types-triggered"`
+	// DataTypesHeader lists the numeric IDs of the triggered data types.
+	DataTypesHeader string `env:"DATA_TYPES_HEADER" envDefault:"x-guardrails-data-types-triggered"`
+	// TriggeredRulesHeader lists the IDs of the triggered rules.
 	TriggeredRulesHeader string `env:"TRIGGERED_RULES_HEADER" envDefault:"x-guardrails-triggered-rules"`
+	// ReplacementCountsHeader lists, for the same rules, how many distinct
+	// values each one replaced with a placeholder (rule_id=count).
+	ReplacementCountsHeader string `env:"REPLACEMENT_COUNTS_HEADER" envDefault:"x-guardrails-replacement-counts"`
 
-	// ExposeTriggeredRules controls whether the triggered-rules header is
-	// added to responses. Rule IDs reveal which detectors fired, so exposing
-	// them to end clients is opt-in.
+	// ExposeTriggeredRules controls whether the triggered-rules and
+	// replacement-counts headers are added to responses. Rule IDs reveal which
+	// detectors fired, so exposing them to end clients is opt-in.
 	ExposeTriggeredRules bool `env:"EXPOSE_TRIGGERED_RULES" envDefault:"false"`
 }
 

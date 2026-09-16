@@ -68,9 +68,10 @@ env-дефолтах (кастомные правила — только фай�
 | `GUARDRAILS_RULES_GITLEAKS_REGEX_RULES_FILE` | `./configs/guardrails_regex_rules.gitleaks.generated.yaml` | генерируемый файл правил |
 | `GUARDRAILS_RULES_MAX_CUSTOM` | `500` | максимум кастомных правил через API; `0` = без лимита; превышение → 429 (`ResourceExhausted`) |
 | `GUARDRAILS_RULES_MAX_PATTERN_LEN` | `4096` | максимум длины regex кастомного правила в байтах; `0` = без лимита; превышение → 400 |
-| `GUARDRAILS_HEADERS_DATA_TYPES_HEADER` | `x-guardrails-data-types-triggered` | заголовок ответа со сработавшими типами данных |
-| `GUARDRAILS_HEADERS_TRIGGERED_RULES_HEADER` | `x-guardrails-triggered-rules` | заголовок ответа со сработавшими ID правил |
-| `GUARDRAILS_HEADERS_EXPOSE_TRIGGERED_RULES` | `false` | эмитить заголовок сработавших правил (раскрывает детекторы → opt-in) |
+| `GUARDRAILS_HEADERS_DATA_TYPES_HEADER` | `x-guardrails-data-types-triggered` | заголовок ответа со сработавшими типами данных; пусто отключает |
+| `GUARDRAILS_HEADERS_TRIGGERED_RULES_HEADER` | `x-guardrails-triggered-rules` | заголовок ответа со сработавшими ID правил; пусто отключает |
+| `GUARDRAILS_HEADERS_REPLACEMENT_COUNTS_HEADER` | `x-guardrails-replacement-counts` | заголовок ответа с числом замен по каждому сработавшему правилу (`rule_id=число`); пусто отключает |
+| `GUARDRAILS_HEADERS_EXPOSE_TRIGGERED_RULES` | `false` | эмитить заголовки сработавших правил и числа замен, когда маскирование сработало (раскрывает детекторы → opt-in); заголовок типов данных выставляется и без неё; формат — [../architecture/request-lifecycle.md](../architecture/request-lifecycle.md#заголовки-ответа) |
 | `GUARDRAILS_STORE_BACKEND` | `in_memory` | `in_memory` \| `redis` \| `postgres` — хранит кастомные правила, настройки и аудит (не masking state data-path, который в процессе) |
 | `GUARDRAILS_STORE_MASKING_TTL` | `15m` | страховочный TTL masking state (для межрепличного fallback); должен превышать самый длинный стриминговый ответ |
 | `GUARDRAILS_STORE_REDIS_ADDR` | `redis:6379` | адрес redis-бэкенда |
