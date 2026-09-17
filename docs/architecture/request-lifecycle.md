@@ -15,12 +15,17 @@ upstream без изменений.
 3. `p.Settings = settings.Effective(глобальные настройки, значение override-заголовка)` —
    чистое in-memory-вычисление; настройки берутся из in-process `atomic.Pointer`-кэша, без
    сетевого I/O.
-4. Извлекаются текстовые поля (`pkg/llmutils`), сканируются
+4. Если объект в теле повторяет ключ, тело сводится к одному значению на ключ — последнему,
+   на месте первого вхождения (`llmutils.CollapseDuplicateKeys`, счётчик
+   `duplicate_keys_collapsed_total`). gjson читает первое вхождение, а upstream обычно —
+   последнее; без этого скан видел бы одно значение, а модель — другое. Дальше работает
+   сведённое тело, и в `enforce` пересылается именно оно.
+5. Извлекаются текстовые поля (`pkg/llmutils`), сканируются
    (`pkg/guardrails/regex/scanners/sensitive`), маскируются
    (`internal/usecases/guardrails/mask`), JSON патчится через sjson.
-5. `MaskingState` пишется в хранилище best-effort (для межрепличного fallback; ошибки
+6. `MaskingState` пишется в хранилище best-effort (для межрепличного fallback; ошибки
    только логируются).
-6. Строится исходящий `*http.Request` на `Upstream.BaseURL + path` (копируются
+7. Строится исходящий `*http.Request` на `Upstream.BaseURL + path` (копируются
    метод/заголовки, вырезаются hop-by-hop-заголовки по RFC 7230 §6.1; per-path override
    через `GUARDRAILS_UPSTREAM_PATH_BASE_URLS`), и маскированное тело пересылается upstream.
 

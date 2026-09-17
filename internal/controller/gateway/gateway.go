@@ -30,10 +30,12 @@ import (
 
 	"github.com/cloud-ru-tech/guardrails-llm-filter/internal/config"
 	"github.com/cloud-ru-tech/guardrails-llm-filter/internal/guardrails/demask"
+	"github.com/cloud-ru-tech/guardrails-llm-filter/internal/logging"
 	"github.com/cloud-ru-tech/guardrails-llm-filter/internal/metrics"
 	"github.com/cloud-ru-tech/guardrails-llm-filter/internal/models"
 	"github.com/cloud-ru-tech/guardrails-llm-filter/internal/service/settings"
 	"github.com/cloud-ru-tech/guardrails-llm-filter/internal/usecases/guardrails/mask"
+	"github.com/cloud-ru-tech/guardrails-llm-filter/pkg/llmutils"
 )
 
 const (
@@ -164,13 +166,29 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	outBody := body
+	if maskable && len(body) > 0 {
+		// A repeated object key reads as its first value here (gjson) but as its
+		// last one in typical upstreams, so the model could get text that was
+		// never scanned. Scan — and in enforce mode forward — the body with one
+		// value per key, so that both sides read the same text. Detect mode
+		// still forwards the client's bytes untouched.
+		if collapsed, changed := llmutils.CollapseDuplicateKeys(body); changed {
+			metrics.IncDuplicateKeysCollapsed()
+			logging.Debug(ctx, "request body repeats JSON object keys, keeping the last value of each", "path", r.URL.Path)
+			body = collapsed
+			if eff.Mode != models.ModeDetect {
+				outBody = collapsed
+			}
+		}
+	}
+
 	// The client's streaming intent lives in the top-level "stream" boolean of
 	// the request body — the same field for all three supported formats. It
 	// drives the audit IsStreaming flag and lets the response phase treat an
 	// upstream stream as SSE even when the upstream mislabels its Content-Type.
 	streamRequested := gjson.GetBytes(body, "stream").Bool()
 
-	outBody := body
 	var factory *demask.Factory // non-nil ⇒ demask the response
 	var requestID string        // keys the audit record for response-phase enrichment
 	var triggered http.Header   // the masking outcome reported in the response headers

@@ -46,6 +46,7 @@ flowchart LR
 | `unknown_format_passthrough_total` | counter | тела/SSE-стримы ответа, пропущенные без демаскирования из-за неизвестного формата API в masking state (fail-open) |
 | `unsupported_body_schema_total` | counter | тела запроса, пропущенные без маскирования из-за нераспознанной схемы (fail-open); ненулевой темп обычно значит, что путь в `GUARDRAILS_PATHS` привязан к неверному формату |
 | `unguarded_path_passthrough_total` | counter | запросы, проксированные на upstream без маскирования, потому что путь не совпал ни с одним охраняемым путём LLM |
+| `duplicate_keys_collapsed_total` | counter | запросы на охраняемом пути, в JSON-теле которых объект повторял ключ. Тело сканируется (а в `enforce` и форвардится) с одним значением на ключ — последним, как читают Python `json`/`orjson`, `JSON.parse` и Go `encoding/json`; иначе скан видел бы первое значение, а модель — последнее. SDK таких тел не шлют: ненулевой темп обычно значит, что клиент прощупывает маскирование |
 
 Плюс стандартные серверные gRPC-метрики из `go-grpc-prometheus` (management API :9000).
 Пошаговое подключение Prometheus/Alertmanager/Grafana — в

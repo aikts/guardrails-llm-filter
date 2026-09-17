@@ -197,6 +197,14 @@ var (
 		},
 	)
 
+	duplicateKeysCollapsed = promauto.NewCounter(
+		prometheus.CounterOpts{
+			Namespace: namespace,
+			Name:      "duplicate_keys_collapsed_total",
+			Help:      "Total number of requests on a guarded path whose JSON body repeated an object key. The body was scanned (and, in enforce mode, forwarded) with each key once, holding its last value — the one typical upstream JSON parsers keep. No SDK sends such bodies, so a non-zero rate usually means a client probing the masking.",
+		},
+	)
+
 	unsupportedBodySchema = promauto.NewCounter(
 		prometheus.CounterOpts{
 			Namespace: namespace,
@@ -317,6 +325,12 @@ func IncUnknownFormatPassthrough() {
 // because its path matched no guarded LLM path.
 func IncUnguardedPathPassthrough() {
 	unguardedPathPassthrough.Inc()
+}
+
+// IncDuplicateKeysCollapsed records a guarded request whose JSON body repeated
+// an object key and was scanned with the last value of each.
+func IncDuplicateKeysCollapsed() {
+	duplicateKeysCollapsed.Inc()
 }
 
 // IncUnsupportedBodySchema records a request on a guarded path whose body the

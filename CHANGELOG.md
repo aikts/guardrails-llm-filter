@@ -76,6 +76,16 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- A request body that repeats a JSON object key no longer slips past masking.
+  The extractors read the first occurrence of a key (gjson), while typical
+  upstreams keep the last one, so
+  `{"role":"user","content":"clean","content":"<PII>"}` was scanned as `clean`
+  and the model got the PII — likewise for a repeated `messages`, `input` or
+  part `type`. On a guarded path such a body is now collapsed to one value per
+  key (the last, in the key's first position) before it is scanned, and in
+  enforce mode the collapsed body is what gets forwarded; detect mode still
+  forwards the client's bytes. Only the objects involved are re-serialized.
+  New metric `duplicate_keys_collapsed_total` counts these requests.
 - The data plane no longer sends a request to the upstream twice. With a
   client `Idempotency-Key` / `X-Idempotency-Key` header, net/http replayed a
   request whose reused keep-alive connection broke after the request was
