@@ -30,15 +30,33 @@
 Рабочая ветка `kts/<тег апстрима>` (сейчас `kts/v0.1.2.1`) начинается ровно с тега
 апстрима, поверх лежат только наши коммиты, каждый — самостоятельное изменение с тестами
 и сообщением в стиле апстрима (Conventional Commits на английском). `main` форка повторяет
-апстрим и своих коммитов не несёт. Стек на `kts/v0.1.2.1`:
+апстрим и своих коммитов не несёт. Список ниже описывает стек полностью и совпадает с
+`git log --reverse v0.1.2.1..kts/v0.1.2.1`; новый коммит в стеке дополняет его тем же
+изменением. Стек на `kts/v0.1.2.1`:
 
 1. `feat(gateway): emit masking-outcome response headers` — заголовки
    `x-guardrails-data-types-triggered`, `x-guardrails-triggered-rules` и
-   `x-guardrails-replacement-counts` в ответе data-plane. **Кандидат в апстрим**: коммит не
-   содержит ничего специфичного для форка; PR в `cloud-ru-tech/guardrails-llm-filter`
-   открывает владелец проекта, если сочтёт нужным.
+   `x-guardrails-replacement-counts` в ответе data-plane.
 2. `ci: release the fork's image on v*-kts.* tags` — только для форка.
 3. `docs: describe the aikts fork discipline` — этот раздел, только для форка.
+4. `chore(deps): bump Go to 1.26.6 and grpc to 1.83.2` — security-бамп по находкам
+   `govulncheck`, только для форка. Переносится, только пока апстрим держит версии ниже;
+   когда апстрим поднимет Go и grpc до этих версий или выше, коммит выкидывается (при
+   cherry-pick он конфликтует в `go.mod`/`go.sum` — это и есть сигнал).
+5. `fix(gateway): never replay an upstream request after a connection loss` — исходящий
+   запрос без `GetBody`: с клиентским `Idempotency-Key` net/http повторял POST после обрыва
+   переиспользованного соединения, то есть второй вызов модели и второе списание.
+6. `feat(app): configurable graceful shutdown with a drain phase` —
+   `GUARDRAILS_SHUTDOWN_DRAIN_PERIOD` и `GUARDRAILS_SHUTDOWN_TIMEOUT` вместо зашитых 10 с;
+   дефолты сохраняют прежнее поведение.
+7. `fix(gateway): collapse repeated JSON object keys before masking` — тело с повторённым
+   ключом объекта сводится к последнему значению до скана: gjson читает первое вхождение,
+   а LiteLLM — последнее, и повторённый `content` обходил маскирование.
+8. `docs: list the whole fork stack` — правка этого раздела, только для форка. При
+   подъёме docs-коммиты (3 и 8) можно слить в один.
+
+**Кандидаты в апстрим** — 1, 5, 6 и 7: в них нет ничего специфичного для форка, PR в
+`cloud-ru-tech/guardrails-llm-filter` открывает владелец проекта, если сочтёт нужным.
 
 **Подъём на новую версию апстрима** — перенос стека на новый тег, а не мерж:
 
