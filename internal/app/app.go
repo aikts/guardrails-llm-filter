@@ -427,58 +427,76 @@ func (e *App) Start(ctx context.Context) error {
 	go e.SettingsService().RunRefresh(refreshCtx, e.cfg.Guardrails.SettingsRefreshInterval)
 	go e.RulesReloader().RunRefresh(refreshCtx, e.cfg.Guardrails.RulesRefreshInterval)
 
-	e.stop = func() error {
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-		defer cancel()
-
-		cancelRefresh()
-
-		// Shut the data plane first so no new masking work starts, then the
-		// ops/control servers. Shutdown drains in-flight requests (bounded by
-		// shutdownCtx), including long-lived SSE responses.
-		gatewayErr := e.GatewayServer().Shutdown(shutdownCtx)
-
-		var apiErr error
-		if e.apiServer != nil {
-			apiErr = e.apiServer.Shutdown(shutdownCtx)
-		}
-
-		// Gracefully stop the management gRPC server, bounded by shutdownCtx: if
-		// draining outlives the budget, force-stop so shutdown always completes.
-		if e.grpcServer != nil {
-			stopped := make(chan struct{})
-			go func() {
-				e.grpcServer.GracefulStop()
-				close(stopped)
-			}()
-			select {
-			case <-stopped:
-			case <-shutdownCtx.Done():
-				e.grpcServer.Stop()
-			}
-		}
-
-		metricsErr := e.MetricsServer().Shutdown(shutdownCtx)
-
-		// Drain the audit recorder before closing the store so in-flight
-		// (detached) writes are not lost. Bounded by shutdownCtx.
-		if e.auditRecorder != nil {
-			e.auditRecorder.Drain(shutdownCtx)
-		}
-
-		var storeErr error
-		if e.store != nil {
-			storeErr = e.store.Close()
-		}
-
-		return multierr.Combine(gatewayErr, apiErr, metricsErr, storeErr)
-	}
+	e.stop = func() error { return e.shutdown(cancelRefresh) }
 
 	health.SetLiveness(true)
 	health.SetReadiness(true)
 
 	logging.Info(ctx, "All servers started")
 	return nil
+}
+
+// shutdown stops the service in the two phases of config.Shutdown.
+//
+// Drain: readiness turns 503 and the data plane stops keeping connections
+// alive, while its listener keeps serving for DrainPeriod — so the load
+// balancer stops routing here before the listener closes, and pooled clients
+// reconnect to other replicas instead of queueing new work on this one.
+// Liveness stays up: the process is healthy, just leaving.
+//
+// Shutdown: the data plane closes first so no new masking work starts, then
+// the ops/control servers. In-flight requests, including long SSE responses,
+// get up to Timeout to finish.
+func (e *App) shutdown(cancelRefresh context.CancelFunc) error {
+	cancelRefresh()
+
+	gatewaySrv := e.GatewayServer()
+	health.SetReadiness(false)
+	gatewaySrv.SetKeepAlivesEnabled(false)
+	if drain := e.cfg.Shutdown.DrainPeriod; drain > 0 {
+		logging.Info(context.Background(), "Draining before shutdown", "drain_period", drain.String())
+		time.Sleep(drain)
+	}
+
+	shutdownCtx, cancel := context.WithTimeout(context.Background(), e.cfg.Shutdown.Timeout)
+	defer cancel()
+
+	gatewayErr := gatewaySrv.Shutdown(shutdownCtx)
+
+	var apiErr error
+	if e.apiServer != nil {
+		apiErr = e.apiServer.Shutdown(shutdownCtx)
+	}
+
+	// Gracefully stop the management gRPC server, bounded by shutdownCtx: if
+	// draining outlives the budget, force-stop so shutdown always completes.
+	if e.grpcServer != nil {
+		stopped := make(chan struct{})
+		go func() {
+			e.grpcServer.GracefulStop()
+			close(stopped)
+		}()
+		select {
+		case <-stopped:
+		case <-shutdownCtx.Done():
+			e.grpcServer.Stop()
+		}
+	}
+
+	metricsErr := e.MetricsServer().Shutdown(shutdownCtx)
+
+	// Drain the audit recorder before closing the store so in-flight
+	// (detached) writes are not lost. Bounded by shutdownCtx.
+	if e.auditRecorder != nil {
+		e.auditRecorder.Drain(shutdownCtx)
+	}
+
+	var storeErr error
+	if e.store != nil {
+		storeErr = e.store.Close()
+	}
+
+	return multierr.Combine(gatewayErr, apiErr, metricsErr, storeErr)
 }
 
 // Stop gracefully shuts down all servers, background tickers and the repository.

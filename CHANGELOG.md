@@ -28,6 +28,13 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   previously emitted none of these headers, although the configuration and docs
   described them. Same-named headers from the upstream are not relayed: the
   data-types one never, the rule ones while exposure is on.
+- Configurable graceful shutdown. `GUARDRAILS_SHUTDOWN_DRAIN_PERIOD` (default
+  `0s`) adds a drain phase on SIGTERM/SIGINT: `/readyz` turns 503 and the data
+  plane stops keeping connections alive but keeps serving, so the instance
+  leaves load balancing before its listener closes (clients are no longer
+  refused mid-rollout). `GUARDRAILS_SHUTDOWN_TIMEOUT` (default `10s`, the
+  previously hard-coded budget) bounds how long in-flight requests, long SSE
+  streams included, may take to finish afterwards.
 - Optional keyword pre-filter for the sensitive scanner
   (`GUARDRAILS_KEYWORD_PREFILTER_ENABLED`, off by default): skips a rule's regex
   when none of its `keywords` is present in the text. It is recall-preserving —

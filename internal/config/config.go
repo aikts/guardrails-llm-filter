@@ -64,6 +64,32 @@ type Config struct {
 	UI         UI         `envPrefix:"UI_"`
 	Audit      Audit      `envPrefix:"AUDIT_"`
 	Upstream   Upstream   `envPrefix:"UPSTREAM_"`
+	Shutdown   Shutdown   `envPrefix:"SHUTDOWN_"`
+}
+
+// Shutdown configures the graceful stop on SIGTERM/SIGINT. It runs in two
+// phases: drain, then shutdown.
+//
+// Drain: readiness (/readyz) turns 503 and the data plane stops keeping
+// connections alive (idle keep-alive connections are closed, every response
+// closes its connection), but the listener keeps accepting and serving
+// requests for DrainPeriod. This leaves time for the orchestrator to take the
+// instance out of load balancing: clients that still reach it are served
+// instead of refused, and pooled clients move to other replicas.
+//
+// Shutdown: the listeners close, and in-flight requests — long SSE streams and
+// non-streamed responses still waiting for the upstream alike — get up to
+// Timeout to complete; whatever still runs then is cut off when the process
+// exits. The orchestrator's kill deadline (Kubernetes
+// terminationGracePeriodSeconds) must exceed DrainPeriod + Timeout.
+type Shutdown struct {
+	// DrainPeriod is how long the data plane keeps serving after the stop
+	// signal, with readiness off. 0 (default) skips the drain phase.
+	DrainPeriod time.Duration `env:"DRAIN_PERIOD" envDefault:"0s"`
+
+	// Timeout bounds the shutdown phase: finishing in-flight requests and
+	// stopping the other servers. Must be positive.
+	Timeout time.Duration `env:"TIMEOUT" envDefault:"10s"`
 }
 
 // Upstream configures the LLM provider this service forwards masked requests
@@ -331,6 +357,14 @@ func Load() (*Config, error) {
 	default:
 		return nil, fmt.Errorf("%sAUDIT_STORE_ORIGINAL_TEXTS must be one of %q, %q, %q; got %q",
 			EnvPrefix, OriginalsOff, OriginalsPlain, OriginalsEncrypted, cfg.Audit.StoreOriginalTexts)
+	}
+	// A negative drain is meaningless, and a zero shutdown budget would cut
+	// every in-flight request the moment the stop signal arrives.
+	if cfg.Shutdown.DrainPeriod < 0 {
+		return nil, fmt.Errorf("%sSHUTDOWN_DRAIN_PERIOD must be >= 0, got %s", EnvPrefix, cfg.Shutdown.DrainPeriod)
+	}
+	if cfg.Shutdown.Timeout <= 0 {
+		return nil, fmt.Errorf("%sSHUTDOWN_TIMEOUT must be > 0, got %s", EnvPrefix, cfg.Shutdown.Timeout)
 	}
 	// A malformed upstream URL must fail boot rather than surface as a per-
 	// request forward error. BaseURL is optional here (it becomes required once

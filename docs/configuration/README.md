@@ -55,6 +55,8 @@ env-дефолтах (кастомные правила — только фай�
 | `GUARDRAILS_UPSTREAM_IDLE_CONN_TIMEOUT` | `90s` | пул соединений upstream: таймаут idle-соединения |
 | `GUARDRAILS_UPSTREAM_PATH_BASE_URLS` | — | per-path переопределения базового URL как пары `path=url` через запятую (например, `/v1/messages=https://api.anthropic.com`); путь не из списка использует `UPSTREAM_BASE_URL` |
 | `GUARDRAILS_UPSTREAM_INSECURE_SKIP_VERIFY` | `false` | ⚠️ отключает проверку TLS-сертификата upstream — только для локального тестирования |
+| `GUARDRAILS_SHUTDOWN_DRAIN_PERIOD` | `0s` | фаза дренажа по SIGTERM/SIGINT: `/readyz` отдаёт 503, keep-alive выключен (idle-соединения закрываются, каждый ответ закрывает своё), но data-plane ещё столько принимает и обслуживает запросы — пока балансировщик не уберёт экземпляр; `0` — без фазы; отрицательное — отказ старта. См. [../operations/](../operations/README.md#остановка) |
+| `GUARDRAILS_SHUTDOWN_TIMEOUT` | `10s` | бюджет остановки после дренажа: столько ждут запросы в полёте (включая SSE и ожидание первого байта от upstream), потом процесс выходит и рвёт оставшиеся; должен быть `> 0` |
 | `GUARDRAILS_ENABLED` | `true` | глобальный вкл/выкл (seed-значение — см. settings.md) |
 | `GUARDRAILS_MODE` | `enforce` | `detect` = shadow-режим: скан + метрики/аудит, трафик не тронут (seed-значение) |
 | `GUARDRAILS_DATA_TYPES` | `1,2,3,4,5,6` | включённые типы данных, числа или имена; `6`/CUSTOM включает кастомные правила из API — без него они молча не сканируются |

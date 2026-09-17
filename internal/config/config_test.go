@@ -179,3 +179,35 @@ func TestLoadUpstreamInvalidPathOverrideFailsBoot(t *testing.T) {
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "GUARDRAILS_UPSTREAM_PATH_BASE_URLS")
 }
+
+func TestLoadShutdownDefaults(t *testing.T) {
+	cfg, err := config.Load()
+	require.NoError(t, err)
+	// No drain phase and a 10s shutdown budget, as before the settings existed.
+	assert.Equal(t, config.Shutdown{DrainPeriod: 0, Timeout: 10 * time.Second}, cfg.Shutdown)
+}
+
+func TestLoadShutdownFromEnv(t *testing.T) {
+	t.Setenv("GUARDRAILS_SHUTDOWN_DRAIN_PERIOD", "10s")
+	t.Setenv("GUARDRAILS_SHUTDOWN_TIMEOUT", "520s")
+
+	cfg, err := config.Load()
+	require.NoError(t, err)
+	assert.Equal(t, config.Shutdown{DrainPeriod: 10 * time.Second, Timeout: 520 * time.Second}, cfg.Shutdown)
+}
+
+func TestLoadShutdownInvalidFailsBoot(t *testing.T) {
+	cases := map[string]string{
+		"GUARDRAILS_SHUTDOWN_DRAIN_PERIOD": "-1s",
+		"GUARDRAILS_SHUTDOWN_TIMEOUT":      "0s",
+	}
+	for name, value := range cases {
+		t.Run(name, func(t *testing.T) {
+			t.Setenv(name, value)
+
+			_, err := config.Load()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), name)
+		})
+	}
+}
