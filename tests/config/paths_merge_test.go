@@ -33,7 +33,7 @@ func TestPartialPathsOverrideStillGuardsCoreEndpoints(t *testing.T) {
 		{"/v1/responses", models.APIFormatResponses},
 	}
 	for _, tc := range cases {
-		got, ok := resolver.Resolve(tc.path)
+		got, _, ok := resolver.Resolve(tc.path)
 		assert.True(t, ok, "path %q must resolve (be guarded)", tc.path)
 		assert.Equal(t, tc.want, got, "path %q format", tc.path)
 	}

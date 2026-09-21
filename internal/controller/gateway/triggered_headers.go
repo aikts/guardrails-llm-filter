@@ -29,11 +29,7 @@ func (h *Handler) triggeredHeaders(st models.MaskingState) http.Header {
 	names := h.cfg.GuardrailsHeaders
 	out := make(http.Header, 3)
 	if len(st.TriggeredDataTypes) > 0 {
-		ids := make([]string, len(st.TriggeredDataTypes))
-		for i, dt := range st.TriggeredDataTypes {
-			ids[i] = strconv.FormatUint(uint64(dt), 10)
-		}
-		setNamed(out, names.DataTypesHeader, strings.Join(ids, ","))
+		setNamed(out, names.DataTypesHeader, strings.Join(dataTypeIDs(st.TriggeredDataTypes), ","))
 	}
 	if names.ExposeTriggeredRules && len(st.TriggeredRuleIDs) > 0 {
 		setNamed(out, names.TriggeredRulesHeader, strings.Join(st.TriggeredRuleIDs, ","))

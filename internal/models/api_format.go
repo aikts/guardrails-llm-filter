@@ -81,20 +81,26 @@ func NewPathResolver(paths map[string]string) (*PathResolver, error) {
 	return &PathResolver{exact: exact, suffixKeys: keys}, nil
 }
 
-// Resolve maps a raw :path header value to its API format. The second
-// return is false when no configured path matches.
-func (r *PathResolver) Resolve(rawPath string) (APIFormat, bool) {
+// Resolve maps a raw :path header value to its API format and to the
+// CONFIGURED path that matched — the route, as opposed to the raw request path
+// it was matched against. They differ for a suffix match (`/openai/v1/messages`
+// resolves to the route `/v1/messages`), and only the route is drawn from
+// configuration: the request path carries an arbitrary client-controlled
+// prefix, so it is unfit for anything that expects a bounded set of values (a
+// span name, a metric label). The last return is false, and the route empty,
+// when no configured path matches.
+func (r *PathResolver) Resolve(rawPath string) (APIFormat, string, bool) {
 	path := rawPath
 	if i := strings.IndexByte(path, '?'); i >= 0 {
 		path = path[:i]
 	}
 	if f, ok := r.exact[path]; ok {
-		return f, true
+		return f, path, true
 	}
 	for _, key := range r.suffixKeys {
 		if len(path) > len(key) && strings.HasSuffix(path, key) {
-			return r.exact[key], true
+			return r.exact[key], key, true
 		}
 	}
-	return "", false
+	return "", "", false
 }
