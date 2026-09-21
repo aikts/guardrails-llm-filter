@@ -45,6 +45,7 @@ type Processor struct {
 	itemIDs   map[demaskerKey]string          // last item_id seen for each key, for synthetic frames
 	outSeq        int64                           // last sequence_number emitted; owns the outgoing sequence space
 	completed     bool                            // true once a terminal response.* event was seen
+	naming        common.EventNaming              // whether upstream names its events, for synthetic frames
 	captureMasked bool                            // record pre-demask text for the audit trail
 	masked        common.MaskedTextRecorder       // pre-demask text content for the audit trail
 }
@@ -149,6 +150,7 @@ func (p *Processor) processFrame(ctx context.Context, frame []byte) {
 	case common.FramePassthrough:
 		p.writeOutput(pf.Original)
 	case common.FrameEvent:
+		p.naming.Observe(pf)
 		p.handleEventFrame(ctx, pf)
 	}
 }
@@ -538,7 +540,7 @@ func (p *Processor) emitSyntheticDeltaFrame(ctx context.Context, key demaskerKey
 			"outputIndex", key.outputIndex, "field", string(key.field))
 		return
 	}
-	p.writeOutput(common.BuildEventFrame([]byte(eventType), data))
+	p.writeOutput(common.BuildEventFrame(p.naming.Name(eventType), data))
 }
 
 // flushKey flushes one streaming demasker; buffered text goes out as a

@@ -107,6 +107,29 @@ func ClassifyFrame(frame []byte) ParsedFrame {
 	return pf
 }
 
+// EventNaming tracks whether an upstream stream names its events, so a frame
+// a processor makes up itself follows the stream's convention. In a stream of
+// unnamed events a client listens for the default "message" event; a made-up
+// frame named after its type would never reach that listener. The zero value
+// assumes named events.
+type EventNaming struct {
+	unnamed bool
+}
+
+// Observe records the convention of an upstream event frame.
+func (n *EventNaming) Observe(pf ParsedFrame) {
+	n.unnamed = len(pf.Event) == 0
+}
+
+// Name returns name for a made-up frame, or nil when the stream's events are
+// unnamed.
+func (n *EventNaming) Name(name string) []byte {
+	if n.unnamed {
+		return nil
+	}
+	return []byte(name)
+}
+
 // NextLine returns the next line (without its trailing \n) and the remainder.
 // If there is no newline left, the entire input is returned as the line and
 // the remainder is empty.
@@ -119,12 +142,17 @@ func NextLine(buf []byte) (line, rest []byte) {
 }
 
 // BuildEventFrame rebuilds a named-event SSE frame from an event name and a
-// JSON data payload. The result includes the trailing "\n\n" separator.
+// JSON data payload. The result includes the trailing "\n\n" separator. An
+// empty name writes no event line at all: the frame being rebuilt had none
+// (the upstream sends unnamed events), and a client that dispatches on the
+// event name does not treat a bare "event: " like a missing line.
 func BuildEventFrame(eventName, dataPayload []byte) []byte {
 	out := make([]byte, 0, len(EventPrefix)+len(eventName)+1+len(DataPrefix)+len(dataPayload)+2)
-	out = append(out, EventPrefix...)
-	out = append(out, eventName...)
-	out = append(out, '\n')
+	if len(eventName) > 0 {
+		out = append(out, EventPrefix...)
+		out = append(out, eventName...)
+		out = append(out, '\n')
+	}
 	out = append(out, DataPrefix...)
 	out = append(out, dataPayload...)
 	out = append(out, '\n', '\n')

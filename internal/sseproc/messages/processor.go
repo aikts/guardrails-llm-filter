@@ -47,6 +47,7 @@ type Processor struct {
 	demaskers map[demaskerKey]common.Demasker // one Demasker per (blockIndex, field)
 	blocks        map[int]*blockAccum             // per-block accumulator and state (block type, raw text, JSON depth)
 	doneSent      bool                            // true if we've already forwarded the [DONE] frame
+	naming        common.EventNaming              // whether upstream names its events, for synthetic frames
 	captureMasked bool                            // record pre-demask text for the audit trail
 	masked        common.MaskedTextRecorder       // pre-demask text content for the audit trail
 }
@@ -142,6 +143,7 @@ func (p *Processor) processFrame(ctx context.Context, frame []byte) {
 	case common.FramePassthrough:
 		p.writeOutput(pf.Original)
 	case common.FrameEvent:
+		p.naming.Observe(pf)
 		p.handleEventFrame(ctx, pf)
 	}
 }
@@ -318,7 +320,7 @@ func (p *Processor) emitSyntheticDeltaFrame(ctx context.Context, blockIdx int, f
 			"blockIndex", blockIdx, "field", string(field))
 		return
 	}
-	p.writeOutput(common.BuildEventFrame([]byte("content_block_delta"), data))
+	p.writeOutput(common.BuildEventFrame(p.naming.Name("content_block_delta"), data))
 }
 
 // deltaWireForField maps a fieldType back to the Anthropic wire-format

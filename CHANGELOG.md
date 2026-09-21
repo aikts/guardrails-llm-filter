@@ -76,6 +76,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `/v1/responses` and `/v1/messages` streams: a frame the processor rewrites
+  no longer goes out with an empty `event: ` line. When the upstream sends
+  unnamed events (LiteLLM on `/v1/responses` sends data lines only), the
+  rebuilt `output_text.done`, `content_part.done`, `output_item.done` and
+  `response.completed` frames got `event: ` with no name, which a client
+  dispatching on the event name does not take for a missing line. The event
+  line is now left out when the name is empty, and a frame made up on flush
+  follows the stream: unnamed in an unnamed stream, so a client listening for
+  the default `message` event still gets it.
 - `/v1/responses` streams: reasoning summaries are demasked.
   `response.reasoning_summary_text.delta`, `.done` and
   `response.reasoning_summary_part.done` were relayed verbatim on the
