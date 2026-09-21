@@ -28,12 +28,12 @@ flowchart LR
 
 | Метрика | Тип / метки | Смысл |
 |---|---|---|
-| `pipeline_duration_seconds` | histogram | суммарное время mask+demask на запрос |
+| `pipeline_duration_seconds` | histogram | работа фильтра над запросом: mask + demask (для SSE — сумма по кускам) без ожидания upstream и клиента; только запросы, дошедшие до маскирования |
 | `mask_duration_seconds` | histogram | маскирование запроса + мутация тела |
 | `mask_scan_duration_seconds` / `scan_duration_seconds` | histogram | regex-скан, все тексты / на текст |
 | `mask_texts_count`, `mask_scan_text_bytes`, `mask_scan_total_bytes` | histogram | объём скана |
-| `demask_duration_seconds` | histogram | демаскирование полного (non-SSE) ответа |
-| `sse_chunk_demask_duration_seconds` | histogram | на SSE-кусок |
+| `demask_duration_seconds` | histogram | демаскирование полного (non-SSE) ответа, без чтения тела upstream |
+| `sse_chunk_demask_duration_seconds` | histogram | обработка одного прочитанного из upstream куска SSE (до 32 KiB) |
 | `triggered_rules_count` | histogram | различных правил на запрос |
 | `rule_triggers_total` | counter `{rule_id}` | срабатывания правил на уровне запроса |
 | `data_type_triggers_total` | counter `{data_type}` | срабатывания типов данных на уровне запроса |

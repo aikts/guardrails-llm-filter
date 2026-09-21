@@ -76,6 +76,15 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The duration histograms `mask_duration_seconds`, `demask_duration_seconds`,
+  `sse_chunk_demask_duration_seconds` and `pipeline_duration_seconds` are now
+  recorded; nothing observed them, so dashboards built on them stayed empty
+  and the `GuardrailsPipelineSlow` alert could never fire. `mask` times the
+  request masking, `demask` the demasking of a full body (not reading it),
+  `sse_chunk_demask` each upstream read of a stream through the SSE
+  processor, and `pipeline` — once per request that reached masking — the
+  sum of the two phases: the filter's own work, without the wait for the
+  upstream or the client.
 - `/v1/responses` and `/v1/messages` streams: a frame the processor rewrites
   no longer goes out with an empty `event: ` line. When the upstream sends
   unnamed events (LiteLLM on `/v1/responses` sends data lines only), the

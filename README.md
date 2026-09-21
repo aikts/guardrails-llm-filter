@@ -74,8 +74,12 @@
 13. `fix(sseproc): never emit an empty SSE event name` — переписанные кадры стрима без строк
     `event:` (так шлёт LiteLLM на `/v1/responses`) уходили с пустой строкой `event: `. Теперь
     строки нет, а синтетические кадры следуют соглашению потока. Заодно дополняет этот раздел.
+14. `fix(metrics): observe the mask, demask and pipeline duration histograms` — гистограммы
+    `mask_duration_seconds`, `demask_duration_seconds`, `sse_chunk_demask_duration_seconds` и
+    `pipeline_duration_seconds` никто не писал, дашборды по ним были пустыми, а алерт на
+    `pipeline_duration_seconds` не мог сработать. Заодно дополняет этот раздел.
 
-**Кандидаты в апстрим** — 1, 5, 6, 7, 9, 11, 12 и 13: в них нет ничего специфичного для форка, PR в
+**Кандидаты в апстрим** — 1, 5, 6, 7, 9, 11, 12, 13 и 14: в них нет ничего специфичного для форка, PR в
 `cloud-ru-tech/guardrails-llm-filter` открывает владелец проекта, если сочтёт нужным.
 
 **Подъём на новую версию апстрима** — мерж тега апстрима в `kts` через PR:
