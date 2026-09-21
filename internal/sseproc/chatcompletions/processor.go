@@ -19,16 +19,18 @@ import (
 type fieldType string
 
 const (
-	fieldContent       fieldType = "content"
-	fieldReasoning     fieldType = "reasoning"
-	fieldToolArguments fieldType = "tool_arguments"
+	fieldContent          fieldType = "content"
+	fieldReasoning        fieldType = "reasoning"
+	fieldReasoningContent fieldType = "reasoning_content"
+	fieldReasoningDetail  fieldType = "reasoning_detail"
+	fieldToolArguments    fieldType = "tool_arguments"
 )
 
 // demaskerKey uniquely identifies a Demasker for one (choiceIndex, toolCallIndex, field) tuple.
 // For content/reasoning fields, toolCallIndex is 0 (unused).
 type demaskerKey struct {
 	choiceIndex   int
-	toolCallIndex int // 0 for content/reasoning, actual index for tool_calls
+	toolCallIndex int // 0 for content/reasoning, the tool call index for tool_calls, the entry index for reasoning_details
 	field         fieldType
 }
 
@@ -128,11 +130,19 @@ func (p *Processor) prepareFrames(ctx context.Context, body []byte, endOfStream 
 // chunkHasText returns true if any choice has content or reasoning.
 func chunkHasText(chunk llmchat.Chunk) bool {
 	for _, choice := range chunk.Choices {
-		if ptrVal(choice.Delta.Content) != "" || ptrVal(choice.Delta.Reasoning) != "" {
+		if ptrVal(choice.Delta.Content) != "" || deltaHasReasoning(choice.Delta) {
 			return true
 		}
 	}
 	return false
+}
+
+// deltaHasReasoning reports whether the delta carries any reasoning field. A
+// reasoning_details entry counts even without text (a signature, encrypted
+// data): it goes out through the reasoning path, after the text a demasker
+// may still be holding for it.
+func deltaHasReasoning(d llmchat.Delta) bool {
+	return ptrVal(d.Reasoning) != "" || ptrVal(d.ReasoningContent) != "" || len(d.ReasoningDetails) > 0
 }
 
 // chunkHasToolCalls returns true if any choice has tool_calls.
@@ -202,9 +212,11 @@ func (p *Processor) handleDataFrame(ctx context.Context, frame, jsonPayload []by
 	if !hasData {
 		// Non-empty choices, but nothing we demask and no metadata: a
 		// delta.refusal / delta.audio, a role-only opening delta
-		// ({"delta":{"role":"assistant"}}) or an empty keepalive delta. These
-		// carry no placeholders, so forward the frame unchanged (fail-open on
-		// content we don't touch) rather than dropping it. Demaskers must NOT
+		// ({"delta":{"role":"assistant"}}) or an empty keepalive delta. Forward
+		// the frame unchanged (fail-open on content we don't touch) rather than
+		// dropping it — anything in it is relayed as the upstream sent it, so a
+		// field that carries model text must be modeled on Delta and demasked
+		// above, or its placeholders reach the client. Demaskers must NOT
 		// be flushed here: a flush would emit a partially buffered placeholder
 		// (e.g. "<EMA") that the next content delta could then never complete,
 		// leaking the placeholder to the client. The withheld tail is delivered
@@ -287,23 +299,23 @@ func (p *Processor) processChoices(ctx context.Context, chunk llmchat.Chunk) {
 // processChoice processes a single choice's text fields and finish reason.
 func (p *Processor) processChoice(ctx context.Context, choice llmchat.ChunkChoice) {
 	content := ptrVal(choice.Delta.Content)
-	reasoning := ptrVal(choice.Delta.Reasoning)
+	hasReasoning := deltaHasReasoning(choice.Delta)
 
-	if content == "" && reasoning == "" {
+	if content == "" && !hasReasoning {
 		return
 	}
 
-	if reasoning != "" {
-		p.processTextField(ctx, choice.Index, fieldReasoning, reasoning)
+	if hasReasoning {
+		p.processReasoning(ctx, choice)
 	}
 
 	if content != "" && !p.contentStarted[choice.Index] {
-		p.flushFieldForChoice(ctx, choice.Index, fieldReasoning)
+		p.flushReasoning(ctx, choice.Index)
 		p.contentStarted[choice.Index] = true
 	}
 
 	if content != "" {
-		p.processTextField(ctx, choice.Index, fieldContent, content)
+		p.processTextField(ctx, choice.Index, content)
 	}
 
 	if choice.FinishReason != nil && ptrVal(choice.FinishReason) != "" {
@@ -311,32 +323,37 @@ func (p *Processor) processChoice(ctx context.Context, choice llmchat.ChunkChoic
 	}
 }
 
-// processTextField demasks a text field and outputs it or falls back on error.
-func (p *Processor) processTextField(ctx context.Context, choiceIdx int, field fieldType, text string) {
-	key := demaskerKey{choiceIdx, 0, field}
+// processTextField demasks a content fragment and outputs whatever is ready.
+func (p *Processor) processTextField(ctx context.Context, choiceIdx int, text string) {
 	if p.captureMasked {
-		p.masked.Add(strconv.Itoa(choiceIdx)+"/"+string(field), text)
+		p.masked.Add(strconv.Itoa(choiceIdx)+"/"+string(fieldContent), text)
 	}
-	d := p.getDemasker(key)
-	demasked, err := d.DemaskChunk(ctx, text, false)
-	if err != nil {
-		p.fallbackTextField(ctx, choiceIdx, field, demasked)
-		return
-	}
-
-	if demasked != "" {
-		p.outputTextFrame(ctx, choiceIdx, field, demasked)
-	}
+	p.outputTextFrame(ctx, choiceIdx, p.demaskText(ctx, demaskerKey{choiceIdx, 0, fieldContent}, text, false))
 }
 
-// fallbackTextField outputs the un-emitted content the demasker handed back
-// when it errored (with any unresolved placeholders intact) so nothing is lost.
-func (p *Processor) fallbackTextField(ctx context.Context, choiceIdx int, field fieldType, content string) {
-	logging.Error(ctx, "Failed to demask content chunk, using fallback", nil, "choiceIdx", choiceIdx, "field", field)
-	if content != "" {
-		metrics.IncDemaskSSEFailed()
-		p.outputTextFrame(ctx, choiceIdx, field, content)
+// demaskText feeds one fragment to the key's demasker (creating it on first
+// use) and returns the text ready for the client. On a demasker error it
+// returns the un-emitted content the demasker handed back (with any
+// unresolved placeholders intact) so nothing is lost.
+func (p *Processor) demaskText(ctx context.Context, key demaskerKey, text string, flush bool) string {
+	demasked, err := p.getDemasker(key).DemaskChunk(ctx, text, flush)
+	if err != nil {
+		logging.Error(ctx, "Failed to demask text chunk, using fallback", err,
+			"choiceIdx", key.choiceIndex, "field", key.field)
+		if demasked != "" {
+			metrics.IncDemaskSSEFailed()
+		}
 	}
+	return demasked
+}
+
+// flushText flushes the key's demasker, if one was ever created, and returns
+// the text it was holding.
+func (p *Processor) flushText(ctx context.Context, key demaskerKey) string {
+	if _, ok := p.demaskers[key]; !ok {
+		return ""
+	}
+	return p.demaskText(ctx, key, "", true)
 }
 
 // takeOutput returns the accumulated output and clears the buffer.
@@ -407,12 +424,18 @@ func isMetadataChunk(chunk llmchat.Chunk) bool {
 	return false
 }
 
-// outputTextFrame outputs a text frame (content or reasoning) for a specific choice.
-func (p *Processor) outputTextFrame(ctx context.Context, choiceIdx int, field fieldType, text string) {
+// outputTextFrame outputs a content text frame for a specific choice.
+// Reasoning goes out through outputReasoningFrame.
+func (p *Processor) outputTextFrame(ctx context.Context, choiceIdx int, text string) {
 	if text == "" {
 		return
 	}
+	p.outputDeltaFrame(ctx, choiceIdx, func(d *llmchat.Delta) { d.Content = &text })
+}
 
+// outputDeltaFrame outputs a frame for a specific choice carrying the merged
+// choice state with every text field cleared, then filled in by fill.
+func (p *Processor) outputDeltaFrame(ctx context.Context, choiceIdx int, fill func(*llmchat.Delta)) {
 	chunk := p.aggr.merged
 	merged, ok := p.aggr.findChoice(choiceIdx)
 	if !ok {
@@ -422,17 +445,14 @@ func (p *Processor) outputTextFrame(ctx context.Context, choiceIdx int, field fi
 	choice := merged.Copy()
 	choice.FinishReason = nil
 
-	if field == fieldContent {
-		choice.Delta.Content = &text
-		choice.Delta.Reasoning = nil
-	} else {
-		choice.Delta.Reasoning = &text
-		choice.Delta.Content = nil
-	}
-
+	choice.Delta.Content = nil
+	choice.Delta.Reasoning = nil
+	choice.Delta.ReasoningContent = nil
+	choice.Delta.ReasoningDetails = nil
 	// Text frames should not include tool_calls or function_call (they're output separately)
 	choice.Delta.ToolCalls = nil
 	choice.Delta.FunctionCall = nil
+	fill(&choice.Delta)
 
 	chunk.Choices = []llmchat.ChunkChoice{choice}
 	chunk.Usage = nil
@@ -445,33 +465,10 @@ func (p *Processor) outputTextFrame(ctx context.Context, choiceIdx int, field fi
 	p.writeOutput(frame)
 }
 
-// flushFieldForChoice flushes a specific field's demasker for a choice.
-func (p *Processor) flushFieldForChoice(ctx context.Context, choiceIdx int, field fieldType) {
-	key := demaskerKey{choiceIdx, 0, field}
-	d, ok := p.demaskers[key]
-	if !ok {
-		return
-	}
-
-	demasked, err := d.DemaskChunk(ctx, "", true)
-	if err != nil {
-		logging.Error(ctx, "Error flushing content demasker, using fallback", err, "key", key)
-		if demasked != "" {
-			metrics.IncDemaskSSEFailed()
-			p.outputTextFrame(ctx, choiceIdx, field, demasked)
-		}
-		return
-	}
-
-	if demasked != "" {
-		p.outputTextFrame(ctx, choiceIdx, field, demasked)
-	}
-}
-
 // flushChoice flushes reasoning, content, function_call, and tool call demaskers for a specific choice.
 func (p *Processor) flushChoice(ctx context.Context, choiceIdx int) {
-	p.flushFieldForChoice(ctx, choiceIdx, fieldReasoning)
-	p.flushFieldForChoice(ctx, choiceIdx, fieldContent)
+	p.flushReasoning(ctx, choiceIdx)
+	p.outputTextFrame(ctx, choiceIdx, p.flushText(ctx, demaskerKey{choiceIdx, 0, fieldContent}))
 	p.flushFunctionCallForChoice(ctx, choiceIdx)
 	p.flushAllToolCallsForChoice(ctx, choiceIdx)
 }

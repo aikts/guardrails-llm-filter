@@ -1,8 +1,12 @@
 package chatcompletions
 
 import (
+	"encoding/json"
 	"fmt"
 	"slices"
+
+	"github.com/tidwall/gjson"
+	"github.com/tidwall/sjson"
 
 	"github.com/cloud-ru-tech/guardrails-llm-filter/internal/sseproc/common"
 	llmchat "github.com/cloud-ru-tech/guardrails-llm-filter/pkg/llmutils/chatcompletions"
@@ -49,12 +53,56 @@ func (ca *choiceAccum) AppendToolArguments(toolCallIdx int, args string) bool {
 type aggregator struct {
 	merged       llmchat.Chunk
 	choicesAccum map[int]*choiceAccum // per-choice tool-args JSON-close tracking
+
+	// reasoningDetails keeps the last reasoning_details entry seen for each
+	// (choice, entry index), so text a demasker releases on a flush goes out
+	// in an entry with the same type, format, id and index.
+	reasoningDetails map[reasoningDetailKey]reasoningDetailTemplate
+}
+
+type reasoningDetailKey struct {
+	choiceIndex int
+	detailIndex int
+}
+
+type reasoningDetailTemplate struct {
+	entry    json.RawMessage
+	textPath string // "text" or "summary"
 }
 
 func newAggregator() *aggregator {
 	return &aggregator{
-		choicesAccum: make(map[int]*choiceAccum),
+		choicesAccum:     make(map[int]*choiceAccum),
+		reasoningDetails: make(map[reasoningDetailKey]reasoningDetailTemplate),
 	}
+}
+
+// rememberReasoningDetail records entry as the template for later tails of
+// its (choice, entry index).
+func (a *aggregator) rememberReasoningDetail(choiceIdx, detailIdx int, textPath string, entry json.RawMessage) {
+	a.reasoningDetails[reasoningDetailKey{choiceIdx, detailIdx}] = reasoningDetailTemplate{entry: entry, textPath: textPath}
+}
+
+// reasoningDetailTail builds a reasoning_details entry carrying text: the
+// identity fields of the last entry seen for (choice, entry index) and the
+// text, without that entry's signature or data — those went out with it.
+func (a *aggregator) reasoningDetailTail(choiceIdx, detailIdx int, text string) json.RawMessage {
+	out := []byte("{}")
+	textPath := "text"
+	if t, ok := a.reasoningDetails[reasoningDetailKey{choiceIdx, detailIdx}]; ok {
+		textPath = t.textPath
+		gjson.ParseBytes(t.entry).ForEach(func(k, v gjson.Result) bool {
+			if reasoningDetailIdentity[k.String()] {
+				out, _ = sjson.SetRawBytes(out, k.String(), []byte(v.Raw))
+			}
+			return true
+		})
+	} else {
+		out, _ = sjson.SetBytes(out, "type", "reasoning.text")
+		out, _ = sjson.SetBytes(out, "index", detailIdx)
+	}
+	out, _ = sjson.SetBytes(out, textPath, text)
+	return out
 }
 
 // findChoice returns a pointer to the merged choice with the given logical
@@ -134,6 +182,8 @@ func (a *aggregator) mergeChoice(in llmchat.ChunkChoice) {
 		// merged state — drop it here.
 		in.Delta.Content = nil
 		in.Delta.Reasoning = nil
+		in.Delta.ReasoningContent = nil
+		in.Delta.ReasoningDetails = nil
 		a.merged.Choices = append(a.merged.Choices, in)
 		return
 	}

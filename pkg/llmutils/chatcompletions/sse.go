@@ -1,5 +1,7 @@
 package chatcompletions
 
+import "encoding/json"
+
 // ──────────────────────────────────────────────────────────────────────────────
 // /v1/chat/completions  STREAMING RESPONSE  (SSE chunks)
 // ──────────────────────────────────────────────────────────────────────────────
@@ -65,7 +67,21 @@ type Delta struct {
 	// this delta; null means streaming has concluded for this field.
 	Content *string `json:"content,omitempty"`
 
+	// Reasoning, ReasoningContent and ReasoningDetails carry the model's
+	// chain-of-thought under the names different backends use: "reasoning"
+	// (vLLM, OpenRouter), "reasoning_content" (DeepSeek, LiteLLM) and
+	// OpenRouter's structured "reasoning_details". One delta may carry the same
+	// text under several of them at once (LiteLLM relaying OpenRouter sends all
+	// three).
 	Reasoning *string `json:"reasoning,omitempty"`
+
+	ReasoningContent *string `json:"reasoning_content,omitempty"`
+
+	// ReasoningDetails elements are kept raw: besides the text ("text" of a
+	// reasoning.text entry, "summary" of a reasoning.summary one) they carry
+	// the fields a client must echo back verbatim — signature, encrypted data,
+	// format, id, index — plus whatever a provider adds later.
+	ReasoningDetails []json.RawMessage `json:"reasoning_details,omitempty"`
 
 	// Refusal is an incremental refusal text fragment.
 	// Refusal *string `json:"refusal,omitempty"`
@@ -157,12 +173,21 @@ func (c Delta) Copy() Delta {
 	for i, tc := range c.ToolCalls {
 		toolCalls[i] = tc.Copy()
 	}
+	var details []json.RawMessage
+	if c.ReasoningDetails != nil {
+		details = make([]json.RawMessage, len(c.ReasoningDetails))
+		for i, d := range c.ReasoningDetails {
+			details[i] = append(json.RawMessage(nil), d...)
+		}
+	}
 	return Delta{
-		Role:         copyString(c.Role),
-		Content:      copyString(c.Content),
-		Reasoning:    copyString(c.Reasoning),
-		ToolCalls:    toolCalls,
-		FunctionCall: c.FunctionCall.CopyPtr(),
+		Role:             copyString(c.Role),
+		Content:          copyString(c.Content),
+		Reasoning:        copyString(c.Reasoning),
+		ReasoningContent: copyString(c.ReasoningContent),
+		ReasoningDetails: details,
+		ToolCalls:        toolCalls,
+		FunctionCall:     c.FunctionCall.CopyPtr(),
 	}
 }
 

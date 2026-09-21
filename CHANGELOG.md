@@ -76,6 +76,21 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `/v1/chat/completions` streams: a reasoning model's chain-of-thought no
+  longer reaches the client with placeholders in it. The SSE processor knew
+  only `delta.reasoning`, so a delta carrying `delta.reasoning_content`
+  (DeepSeek, LiteLLM) or OpenRouter's `delta.reasoning_details` was relayed
+  verbatim, placeholders included — and when the same delta also had
+  `reasoning` or `content`, those fields were dropped from the rebuilt frame.
+  Both are now demasked with their own streaming demaskers (`text`/`summary`
+  of a `reasoning_details` entry; its signature and encrypted data pass
+  through), and the reasoning fields of one delta go out in one frame, so a
+  client reading `reasoning_content or reasoning` does not show the text
+  twice. A signed `reasoning_details` entry releases the text held for it
+  first. Non-streamed responses now demask `reasoning_details` too, and the
+  copies of the reasoning LiteLLM keeps under
+  `message.provider_specific_fields` (OpenRouter's `reasoning` and
+  `reasoning_details`), which reached the client with placeholders.
 - A request body that repeats a JSON object key no longer slips past masking.
   The extractors read the first occurrence of a key (gjson), while typical
   upstreams keep the last one, so

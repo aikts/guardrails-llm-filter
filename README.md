@@ -62,8 +62,13 @@
    Заодно дополняет этот раздел — в апстрим коммит идёт без этой правки README.
 10. `ci: move the fork to a single kts branch` — ветка `kts` вместо `kts/<тег апстрима>`:
     триггер CI, комментарии в workflow и этот раздел; только для форка.
+11. `fix(sseproc): demask reasoning_content and reasoning_details in chat completion streams` —
+    стрим chat/completions знал только `delta.reasoning`, и дельта с `reasoning_content`
+    (DeepSeek, LiteLLM) или `reasoning_details` (OpenRouter) уходила клиенту с плейсхолдерами.
+    Теперь они демаскируются, а reasoning-поля одной дельты уходят одним кадром. В полном
+    ответе демаскируется и `reasoning_details`. Заодно дополняет этот раздел.
 
-**Кандидаты в апстрим** — 1, 5, 6, 7 и 9: в них нет ничего специфичного для форка, PR в
+**Кандидаты в апстрим** — 1, 5, 6, 7, 9 и 11: в них нет ничего специфичного для форка, PR в
 `cloud-ru-tech/guardrails-llm-filter` открывает владелец проекта, если сочтёт нужным.
 
 **Подъём на новую версию апстрима** — мерж тега апстрима в `kts` через PR:
