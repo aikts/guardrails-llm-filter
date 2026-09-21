@@ -27,9 +27,11 @@ import (
 	"github.com/cloud-ru-tech/guardrails-llm-filter/internal/service/audit"
 	"github.com/cloud-ru-tech/guardrails-llm-filter/internal/service/rulesreload"
 	"github.com/cloud-ru-tech/guardrails-llm-filter/internal/service/settings"
+	"github.com/cloud-ru-tech/guardrails-llm-filter/internal/tracing"
 	maskuc "github.com/cloud-ru-tech/guardrails-llm-filter/internal/usecases/guardrails/mask"
 	rulesuc "github.com/cloud-ru-tech/guardrails-llm-filter/internal/usecases/rules"
 	"github.com/cloud-ru-tech/guardrails-llm-filter/internal/usecases/rules/builtins"
+	"github.com/cloud-ru-tech/guardrails-llm-filter/internal/version"
 	gregistry "github.com/cloud-ru-tech/guardrails-llm-filter/pkg/guardrails/regex/registry"
 	"github.com/cloud-ru-tech/guardrails-llm-filter/pkg/guardrails/regex/rule"
 	"github.com/cloud-ru-tech/guardrails-llm-filter/pkg/guardrails/regex/scanners/placeholder"
@@ -51,6 +53,7 @@ type App struct {
 	metricsGatherer prometheus.Gatherer
 	gateway         *gateway.Handler
 	stop            func() error
+	traceShutdown   func(context.Context) error
 
 	maskUC *maskuc.UseCase
 
@@ -365,6 +368,16 @@ func (e *App) MetricsServer() *http.Server {
 
 // Start brings up all servers and registers a graceful shutdown handler.
 func (e *App) Start(ctx context.Context) error {
+	// Tracing first, so the propagator is installed before the data plane can
+	// serve a request. A misconfigured pipeline fails the boot here rather than
+	// leaving the process silently untraced; with no OTLP endpoint configured
+	// this is a no-op that only installs the propagator.
+	traceShutdown, err := tracing.Setup(ctx, version.Version)
+	if err != nil {
+		return fmt.Errorf("setup tracing: %w", err)
+	}
+	e.traceShutdown = traceShutdown
+
 	// Initialise settings and merge stored custom rules before serving.
 	// Both are fail-open: env defaults / file rules serve until the store
 	// heals via the refresh tickers.
@@ -491,12 +504,21 @@ func (e *App) shutdown(cancelRefresh context.CancelFunc) error {
 		e.auditRecorder.Drain(shutdownCtx)
 	}
 
+	// Flush pending spans once the data plane is down and no new ones can be
+	// produced. A no-op when tracing is disabled. It shares the one shutdown
+	// budget with every step above, so a drain that outlives it costs the last
+	// batch of telemetry — the right trade against delaying the process exit.
+	var traceErr error
+	if e.traceShutdown != nil {
+		traceErr = e.traceShutdown(shutdownCtx)
+	}
+
 	var storeErr error
 	if e.store != nil {
 		storeErr = e.store.Close()
 	}
 
-	return multierr.Combine(gatewayErr, apiErr, metricsErr, storeErr)
+	return multierr.Combine(gatewayErr, apiErr, metricsErr, traceErr, storeErr)
 }
 
 // Stop gracefully shuts down all servers, background tickers and the repository.

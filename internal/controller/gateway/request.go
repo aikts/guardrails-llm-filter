@@ -34,11 +34,13 @@ func readBody(ctx context.Context, w http.ResponseWriter, r *http.Request, maxBy
 		var maxErr *http.MaxBytesError
 		if errors.As(err, &maxErr) {
 			logging.Debug(ctx, "request body exceeds limit", "limit", maxBytes)
+			failSpan(ctx, "request body too large")
 			http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
 			return nil, false
 		}
 		// The client failed to deliver its own body — nothing to forward.
 		logging.Debug(ctx, "failed to read request body", "error", err)
+		failSpan(ctx, "unreadable request body")
 		http.Error(w, "failed to read request body", http.StatusBadRequest)
 		return nil, false
 	}
@@ -62,6 +64,15 @@ func (h *Handler) maskRequest(
 ) ([]byte, models.MaskingState, string, bool) {
 	var empty models.MaskingState
 
+	ctx, span := tracer.Start(ctx, spanMask)
+	// The outcome says why the request was (or was not) masked; every value but
+	// "masked" means the body is forwarded unchanged.
+	outcome := outcomeNoFindings
+	defer func() {
+		span.SetAttributes(attrOutcome.String(outcome))
+		span.End()
+	}()
+
 	// Extract scannable request payload fields per API format.
 	var fields []llmutils.ContentField
 	var err error
@@ -79,16 +90,22 @@ func (h *Handler) maskRequest(
 		// GUARDRAILS_PATHS misconfig. Fail open.
 		metrics.IncUnsupportedBodySchema()
 		logging.Debug(ctx, "unsupported request body schema, forwarding unchanged", "format", string(format))
+		outcome = outcomeUnsupportedSchema
 		return nil, empty, "", false
 	}
 	if len(fields) == 0 {
+		outcome = outcomeNoFields
 		return nil, empty, "", false
 	}
 
 	texts := make([]string, len(fields))
+	textBytes := 0
 	for i, f := range fields {
 		texts[i] = f.Value
+		textBytes += len(f.Value)
 	}
+	// Sizes and counts only — never the texts themselves.
+	span.SetAttributes(attrTexts.Int(len(texts)), attrTextBytes.Int(textBytes))
 
 	result, err := h.masker.Handle(ctx, mask.Command{
 		DataTypes: eff.DataTypes,
@@ -97,7 +114,24 @@ func (h *Handler) maskRequest(
 	if err != nil {
 		metrics.IncMaskFailed()
 		logging.Error(ctx, "mask use case error, forwarding unchanged", err)
+		outcome = outcomeError
+		failSpan(ctx, "mask failed")
 		return nil, empty, "", false
+	}
+
+	// Rule and data-type IDs only, as the metrics and response headers already
+	// report them; the values they matched never leave this process. Guarded
+	// because these are the one attributes on this path that are not free to
+	// build: a string slice of four or more elements is boxed reflectively,
+	// which would be spent on every masked request with tracing off or the
+	// trace sampled out.
+	if span.IsRecording() {
+		span.SetAttributes(
+			attrRulesTriggered.Int(len(result.MaskingState.TriggeredRuleIDs)),
+			attrRuleIDs.StringSlice(result.MaskingState.TriggeredRuleIDs),
+			attrDataTypes.StringSlice(dataTypeIDs(result.MaskingState.TriggeredDataTypes)),
+			attrReplacements.Int(len(result.MaskingState.Replacements)),
+		)
 	}
 
 	metrics.ObserveTriggeredRules(len(result.MaskingState.TriggeredRuleIDs))
@@ -118,6 +152,7 @@ func (h *Handler) maskRequest(
 	// request unchanged, and — with no masking state returned — leave the
 	// response relayed verbatim.
 	if eff.Mode == models.ModeDetect {
+		outcome = outcomeDetect
 		metrics.IncRequestMasked(string(models.ModeDetect))
 		if h.audit != nil {
 			h.audit.Record(md, result.MaskingState, result.MaskedTexts)
@@ -143,6 +178,7 @@ func (h *Handler) maskRequest(
 		}
 	}
 
+	outcome = outcomeMasked
 	metrics.IncRequestMasked(string(models.ModeEnforce))
 	if h.audit != nil {
 		h.audit.Record(md, result.MaskingState, result.MaskedTexts)

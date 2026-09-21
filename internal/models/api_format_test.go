@@ -74,7 +74,7 @@ func TestPathResolverResolve(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		got, ok := r.Resolve(tt.path)
+		got, _, ok := r.Resolve(tt.path)
 		assert.Equal(t, tt.wantOK, ok, tt.path)
 		assert.Equal(t, tt.want, got, tt.path)
 	}
@@ -91,12 +91,15 @@ func TestPathResolverLongestSuffixWins(t *testing.T) {
 	})
 	require.NoError(t, err)
 
-	// Both keys are suffixes of the path; the longer, more specific one wins.
-	got, ok := r.Resolve("/openai/v1/chat/completions")
+	// Both keys are suffixes of the path; the longer, more specific one wins,
+	// and the route reported is that configured key, not the request path.
+	got, route, ok := r.Resolve("/openai/v1/chat/completions")
 	require.True(t, ok)
 	assert.Equal(t, models.APIFormatChatCompletions, got)
+	assert.Equal(t, "/v1/chat/completions", route)
 
-	got, ok = r.Resolve("/api/completions")
+	got, route, ok = r.Resolve("/api/completions")
 	require.True(t, ok)
 	assert.Equal(t, models.APIFormatMessages, got)
+	assert.Equal(t, "/completions", route)
 }

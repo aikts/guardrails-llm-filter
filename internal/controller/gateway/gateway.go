@@ -152,9 +152,13 @@ func New(
 // ServeHTTP masks a guarded request, forwards it to the upstream, and demasks
 // the response back to the client.
 func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	ctx := r.Context()
+	format, route, guarded := h.pathResolver.Resolve(r.URL.Path)
 
-	format, guarded := h.pathResolver.Resolve(r.URL.Path)
+	// The server span continues the caller's trace (traceparent) and parents
+	// every phase below; ctx carries it for the rest of the request.
+	ctx, span := startRequestSpan(r, format, route, guarded)
+	defer span.End()
+
 	eff := h.effectiveSettings(r)
 
 	// Decide whether this request is a candidate for masking. Everything else
@@ -165,6 +169,9 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
+	// The size the CLIENT sent, before the duplicate-key collapse below may
+	// rewrite the body.
+	requestBytes := len(body)
 
 	outBody := body
 	if maskable && len(body) > 0 {
@@ -188,6 +195,16 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// drives the audit IsStreaming flag and lets the response phase treat an
 	// upstream stream as SSE even when the upstream mislabels its Content-Type.
 	streamRequested := gjson.GetBytes(body, "stream").Bool()
+
+	// One call: everything the request phase knows about itself is settled by
+	// here, and each SetAttributes costs a heap-allocated slice even when the
+	// span is not recording.
+	span.SetAttributes(
+		attrMode.String(string(eff.Mode)),
+		attrMaskable.Bool(maskable),
+		attrRequestBytes.Int(requestBytes),
+		attrStreaming.Bool(streamRequested),
+	)
 
 	var factory *demask.Factory // non-nil ⇒ demask the response
 	var requestID string        // keys the audit record for response-phase enrichment

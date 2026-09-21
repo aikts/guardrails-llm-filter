@@ -57,6 +57,7 @@ func (h *Handler) forward(
 	target := h.upstreamURL(r)
 	if target == nil {
 		logging.Error(ctx, "no upstream configured for request", nil, "path", r.URL.Path)
+		failSpan(ctx, "no upstream configured")
 		http.Error(w, "upstream not configured", http.StatusBadGateway)
 		return
 	}
@@ -66,6 +67,7 @@ func (h *Handler) forward(
 	outReq, err := http.NewRequestWithContext(ctx, r.Method, target.String(), bytes.NewReader(body))
 	if err != nil {
 		logging.Error(ctx, "failed to build upstream request", err)
+		failSpan(ctx, "failed to build upstream request")
 		http.Error(w, "failed to build upstream request", http.StatusBadGateway)
 		return
 	}
@@ -92,18 +94,28 @@ func (h *Handler) forward(
 		outReq.Header.Set("Accept-Encoding", "identity")
 	}
 
+	// The upstream call gets its own client span, which also replaces the
+	// traceparent copied from the client above (see startUpstreamSpan).
+	upstreamSpan := startUpstreamSpan(ctx, outReq)
+
 	resp, err := h.client.Do(outReq)
 	if err != nil {
 		if ctx.Err() != nil {
 			// Client disconnected; nothing to write.
+			failUpstreamSpan(upstreamSpan, "client disconnected")
 			logging.Debug(ctx, "client disconnected before upstream response", "error", err)
 			return
 		}
+		failUpstreamSpan(upstreamSpan, "upstream request failed")
 		logging.Error(ctx, "upstream request failed", err, "url", target.String())
+		failSpan(ctx, "upstream request failed")
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
 		return
 	}
+	endUpstreamSpan(upstreamSpan, resp.StatusCode)
 	defer func() { _ = resp.Body.Close() }()
+
+	recordResponse(ctx, resp.StatusCode, factory != nil)
 
 	copyHeaders(w.Header(), resp.Header)
 	removeHopByHop(w.Header())
@@ -133,14 +145,22 @@ func (h *Handler) forward(
 
 	capture := h.audit != nil && requestID != ""
 
+	// A timing span only — the demasking below keeps the SERVER context, so its
+	// response size lands next to the request size and a failure marks the span
+	// whose request actually failed. For a stream it covers the whole relay:
+	// how long the client spent receiving demasked tokens.
 	if isSSE {
 		w.WriteHeader(resp.StatusCode)
+		_, sseSpan := tracer.Start(ctx, spanDemaskSSE)
 		texts := demaskSSE(ctx, w, resp.Body, factory, format, capture)
+		sseSpan.End()
 		h.recordMaskedResponse(requestID, texts)
 		return
 	}
 
+	_, fullSpan := tracer.Start(ctx, spanDemask)
 	texts := demaskFull(ctx, w, resp, factory, format, capture)
+	fullSpan.End()
 	h.recordMaskedResponse(requestID, texts)
 }
 
@@ -166,6 +186,7 @@ func demaskFull(ctx context.Context, w http.ResponseWriter, resp *http.Response,
 			return nil
 		}
 		logging.Error(ctx, "failed to read upstream response body", err)
+		failSpan(ctx, "unreadable upstream response")
 		// Headers not yet written; surface a gateway error.
 		http.Error(w, "failed to read upstream response", http.StatusBadGateway)
 		return nil
@@ -183,6 +204,9 @@ func demaskFull(ctx context.Context, w http.ResponseWriter, resp *http.Response,
 		logging.Warn(ctx, "unknown response format, passing body through unchanged", "format", string(format))
 		metrics.IncUnknownFormatPassthrough()
 	}
+
+	// Sizes and counts only — never the response text.
+	setSpanAttributes(ctx, attrResponseBytes.Int(len(full)), attrFields.Int(len(fields)))
 
 	maskedResponseTexts := collectMaskedResponseTexts(capture, fields)
 

@@ -4,7 +4,7 @@
 Справочник всех метрик и алертов — в [docs/operations](../operations/README.md);
 живые счётчики без внешнего стека — на странице **Мониторинг** веб-консоли (`:9080`).
 
-Собираемый стек (шаги 1–3 ниже):
+Собираемый стек (шаги 1–4 ниже):
 
 ```mermaid
 flowchart LR
@@ -21,6 +21,7 @@ flowchart LR
 | Метрики Prometheus | `http://<host>:9090/metrics` (порт — `GUARDRAILS_METRICS_PORT`) |
 | Namespace метрик | `extproc_guardrails_` |
 | JSON-сводка для консоли | `GET :9080/v1/metrics/summary` |
+| Трассы OTLP | экспорт в коллектор, если задан `OTEL_EXPORTER_OTLP_ENDPOINT` (по умолчанию выключено) |
 
 ## 1. Подключить Prometheus
 
@@ -90,3 +91,46 @@ rule_files:
 
 > Дашборд написан под namespace `extproc_guardrails_` и не требует
 > дополнительных переменных — только выбранный data source.
+
+
+## 4. Подключить трассировку (OpenTelemetry)
+
+Метрики отвечают «сколько и как быстро вообще», трасса — «где ушло время
+в этом запросе» и «кто его прислал». Data-plane отдаёт спаны по OTLP в любой
+коллектор (Tempo, Jaeger, OpenTelemetry Collector), как только задан эндпоинт:
+
+```yaml
+environment:
+  OTEL_EXPORTER_OTLP_ENDPOINT: http://tempo:4317   # пусто = трассировка выключена
+  OTEL_SERVICE_NAME: guardrails-llm-filter
+  # OTEL_EXPORTER_OTLP_PROTOCOL: http/protobuf     # если у коллектора только :4318
+  # OTEL_TRACES_SAMPLER: parentbased_traceidratio  # доля трасс вместо всех
+  # OTEL_TRACES_SAMPLER_ARG: "0.1"
+```
+
+Один запрос data-plane — четыре спана:
+
+```mermaid
+flowchart TD
+    S["POST /v1/chat/completions<br/>(server)"] --> M["guardrails.mask"]
+    S --> U["guardrails.upstream<br/>(client)"]
+    S --> D["guardrails.demask<br/>guardrails.demask.sse"]
+```
+
+- `guardrails.mask` — скан и замена значений плейсхолдерами. Атрибут
+  `guardrails.outcome` объясняет, почему запрос не был замаскирован:
+  `no_findings`, `detect`, `unsupported_schema`, `no_fields`, `error` —
+  последние два вместе с красным статусом спана означают проход трафика
+  **без обработки** (fail-open), как и алерт `GuardrailsMaskingFailures`.
+- `guardrails.upstream` — вызов провайдера; спан закрывается на заголовках
+  ответа, поэтому его длительность — время до первого байта, а не длина стрима.
+- `guardrails.demask` / `guardrails.demask.sse` — обратная подстановка
+  оригиналов; для стрима спан покрывает весь SSE-релей, то есть время, пока
+  клиент получал демаскированные токены.
+
+Трасса не рвётся на этом хопе: входящий `traceparent` продолжается, а в запрос
+к провайдеру подставляется `traceparent` спана `guardrails.upstream` — спаны
+провайдера становятся его детьми, а не соседями.
+
+Полный перечень переменных и правило «в спанах только метаданные, никогда —
+содержимое» — в [../configuration/](../configuration/README.md#трассировка-opentelemetry).
