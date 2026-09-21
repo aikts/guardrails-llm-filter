@@ -209,10 +209,15 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var factory *demask.Factory // non-nil ⇒ demask the response
 	var requestID string        // keys the audit record for response-phase enrichment
 	var triggered http.Header   // the masking outcome reported in the response headers
+	var maskSpent time.Duration // time spent masking; zero when the request was not a candidate
 
+	masking := maskable && len(body) > 0
 	switch {
-	case maskable && len(body) > 0:
+	case masking:
+		maskStart := time.Now()
 		masked, state, rid, demaskResp := h.maskRequest(ctx, r, body, format, eff, streamRequested)
+		maskSpent = time.Since(maskStart)
+		metrics.ObserveMaskDuration(maskSpent)
 		if demaskResp {
 			outBody = masked
 			requestID = rid
@@ -223,7 +228,12 @@ func (h *Handler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		metrics.IncUnguardedPathPassthrough()
 	}
 
-	h.forward(ctx, w, r, outBody, factory, format, streamRequested, requestID, triggered)
+	demaskSpent := h.forward(ctx, w, r, outBody, factory, format, streamRequested, requestID, triggered)
+	if masking {
+		// The filter's own work on the request, without the wait for the
+		// upstream: what it adds to the client's latency.
+		metrics.ObservePipelineDuration(maskSpent + demaskSpent)
+	}
 }
 
 // effectiveSettings resolves the global policy, optionally narrowed by the

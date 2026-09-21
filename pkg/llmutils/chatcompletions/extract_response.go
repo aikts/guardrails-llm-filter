@@ -45,6 +45,12 @@ func ExtractResponseContent(body []byte) []llmutils.ContentField {
 //
 // Per choices[i].message:
 //   - content, reasoning, reasoning_content, refusal: plain string fields
+//   - reasoning_details[j].text / .summary: the text of OpenRouter's
+//     structured reasoning entries (their signature and encrypted data are
+//     left alone)
+//   - the same text fields under provider_specific_fields, where LiteLLM puts
+//     the extras of a full response (OpenRouter's reasoning and
+//     reasoning_details)
 //   - function_call.arguments and tool_calls[j].function.arguments: JSON strings
 //     whose path ends in ".arguments" — the caller must demask them structurally
 //     (see DemaskJSONArguments) rather than as plain text.
@@ -55,11 +61,8 @@ func ExtractOutputFields(body []byte) []llmutils.ContentField {
 	for i, choice := range gjson.GetBytes(body, "choices").Array() {
 		base := "choices." + strconv.Itoa(i) + ".message"
 
-		for _, field := range []string{"content", "reasoning", "reasoning_content", "refusal"} {
-			if v := choice.Get("message." + field); v.Type == gjson.String && v.String() != "" {
-				fields = append(fields, llmutils.ContentField{Path: base + "." + field, Value: v.String()})
-			}
-		}
+		fields = appendMessageTextFields(fields, choice.Get("message"), base)
+		fields = appendMessageTextFields(fields, choice.Get("message.provider_specific_fields"), base+".provider_specific_fields")
 
 		if v := choice.Get("message.function_call.arguments"); v.Type == gjson.String && v.String() != "" {
 			fields = append(fields, llmutils.ContentField{Path: base + ".function_call.arguments", Value: v.String()})
@@ -69,6 +72,28 @@ func ExtractOutputFields(body []byte) []llmutils.ContentField {
 			if v := tc.Get("function.arguments"); v.Type == gjson.String && v.String() != "" {
 				fields = append(fields, llmutils.ContentField{
 					Path:  base + ".tool_calls." + strconv.Itoa(j) + ".function.arguments",
+					Value: v.String(),
+				})
+			}
+		}
+	}
+	return fields
+}
+
+// appendMessageTextFields appends the model-text fields of a chat message
+// object (or of its provider_specific_fields) found at path.
+func appendMessageTextFields(fields []llmutils.ContentField, msg gjson.Result, path string) []llmutils.ContentField {
+	for _, field := range []string{"content", "reasoning", "reasoning_content", "refusal"} {
+		if v := msg.Get(field); v.Type == gjson.String && v.String() != "" {
+			fields = append(fields, llmutils.ContentField{Path: path + "." + field, Value: v.String()})
+		}
+	}
+
+	for j, detail := range msg.Get("reasoning_details").Array() {
+		for _, field := range []string{"text", "summary"} {
+			if v := detail.Get(field); v.Type == gjson.String && v.String() != "" {
+				fields = append(fields, llmutils.ContentField{
+					Path:  path + ".reasoning_details." + strconv.Itoa(j) + "." + field,
 					Value: v.String(),
 				})
 			}

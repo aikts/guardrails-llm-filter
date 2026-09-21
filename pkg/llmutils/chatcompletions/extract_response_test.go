@@ -1,6 +1,7 @@
 package chatcompletions
 
 import (
+	"reflect"
 	"testing"
 
 	"github.com/cloud-ru-tech/guardrails-llm-filter/pkg/llmutils"
@@ -179,5 +180,42 @@ func TestExtractResponseContent(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+func TestExtractOutputFields_Reasoning(t *testing.T) {
+	body := []byte(`{
+		"choices": [{
+			"message": {
+				"role": "assistant",
+				"content": "answer",
+				"reasoning": "why",
+				"reasoning_content": "why",
+				"reasoning_details": [
+					{"type": "reasoning.text", "text": "why", "signature": "c2ln", "index": 0},
+					{"type": "reasoning.summary", "summary": "short", "index": 1},
+					{"type": "reasoning.encrypted", "data": "ZW5j", "index": 2},
+					{"type": "reasoning.text", "text": "", "index": 3}
+				],
+				"provider_specific_fields": {
+					"reasoning": "why",
+					"refusal": null,
+					"reasoning_details": [{"type": "reasoning.text", "text": "why", "format": "unknown", "index": 0}]
+				}
+			}
+		}]
+	}`)
+
+	want := []llmutils.ContentField{
+		{Path: "choices.0.message.content", Value: "answer"},
+		{Path: "choices.0.message.reasoning", Value: "why"},
+		{Path: "choices.0.message.reasoning_content", Value: "why"},
+		{Path: "choices.0.message.reasoning_details.0.text", Value: "why"},
+		{Path: "choices.0.message.reasoning_details.1.summary", Value: "short"},
+		{Path: "choices.0.message.provider_specific_fields.reasoning", Value: "why"},
+		{Path: "choices.0.message.provider_specific_fields.reasoning_details.0.text", Value: "why"},
+	}
+	if got := ExtractOutputFields(body); !reflect.DeepEqual(got, want) {
+		t.Errorf("ExtractOutputFields() =\n%+v\nwant\n%+v", got, want)
 	}
 }

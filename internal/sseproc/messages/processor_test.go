@@ -387,6 +387,53 @@ func TestProcessor_ThinkingBlock_DemaskedAndSignaturePassthrough(t *testing.T) {
 	assert.True(t, sigFound, "signature delta should pass through")
 }
 
+// A stream of unnamed events stays unnamed: neither the rebuilt delta nor the
+// one made up on flush gains an event line, empty or not.
+func TestProcessor_UnnamedEventsStayUnnamed(t *testing.T) {
+	unnamed := func(data string) string { return "data: " + data + "\n\n" }
+	body := unnamed(blockStart(0, "text")) +
+		unnamed(textDelta("hi <NAME_1>")) +
+		unnamed(textDelta(" and <NA")) +
+		unnamed(blockStop(0))
+
+	out := processAll(t, New(bufferingReplacing("<NAME_1>", "Alice")), []string{body})
+	assert.NotContains(t, string(out), "event:")
+
+	var text strings.Builder
+	for _, pld := range dataPayloads(t, out) {
+		text.WriteString(gjson.Get(pld, "delta.text").String())
+	}
+	assert.Equal(t, "hi Alice and <NA", text.String())
+
+	outRewritten := processAll(t, New(replacing("<NAME_1>", "Alice")), []string{unnamed(textDelta("hi <NAME_1>"))})
+	assert.Equal(t, "data: "+textDelta("hi Alice")+"\n\n", string(outRewritten))
+}
+
+// A placeholder cut across thinking deltas is held until the block ends and
+// released demasked, still as thinking — never relayed in pieces.
+func TestProcessor_ThinkingBlock_SplitPlaceholder(t *testing.T) {
+	p := New(bufferingReplacing("<NAME_1>", "Alice"))
+
+	body := frame("content_block_start", blockStart(0, "thinking")) +
+		frame("content_block_delta", thinkingDelta(0, "Considering <NA")) +
+		frame("content_block_delta", thinkingDelta(0, "ME_1>'s request")) +
+		frame("content_block_delta", signatureDelta(0, "sig")) +
+		frame("content_block_stop", blockStop(0)) +
+		doneFrame()
+
+	out := processAll(t, p, []string{body})
+	assert.NotContains(t, string(out), "<NA")
+	assert.NotContains(t, string(out), "ME_1>")
+
+	var thinking strings.Builder
+	for _, pld := range dataPayloads(t, out) {
+		if gjson.Get(pld, "delta.type").String() == "thinking_delta" {
+			thinking.WriteString(gjson.Get(pld, "delta.thinking").String())
+		}
+	}
+	assert.Equal(t, "Considering Alice's request", thinking.String())
+}
+
 func TestProcessor_PartialFrameAcrossChunks(t *testing.T) {
 	p := New(passthrough())
 

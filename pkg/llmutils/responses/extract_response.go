@@ -17,10 +17,11 @@ import (
 //   - type "message": content[j].text where content[j].type == "output_text"
 //   - type "function_call": arguments (a JSON string — the caller must guard
 //     the demasked value with json.Valid before patching)
-//   - type "reasoning": summary[j].text where summary[j].type == "summary_text",
-//     and content[j].text where content[j].type == "reasoning_text" (reasoning
-//     models echo prompt text into their chain-of-thought). encrypted_content
-//     is never touched.
+//   - type "reasoning": summary[j].text and content[j].text, whatever the
+//     part's type (reasoning models echo prompt text into their
+//     chain-of-thought; OpenAI types the parts summary_text and
+//     reasoning_text, LiteLLM serving a chat model types them output_text).
+//     encrypted_content is never touched.
 //
 // Everything else (web_search_call, refusal parts, annotations, ...) is left
 // untouched.
@@ -74,11 +75,10 @@ func ExtractItemFields(item gjson.Result, basePath string) []llmutils.ContentFie
 		return []llmutils.ContentField{{Path: basePath + ".arguments", Value: args.String()}}
 
 	case "reasoning":
+		// Every part of a reasoning item is the model's reasoning, so its text
+		// is demasked whatever the part is typed.
 		fields := []llmutils.ContentField{}
 		for j, part := range item.Get("summary").Array() {
-			if part.Get("type").String() != "summary_text" {
-				continue
-			}
 			text := part.Get("text")
 			if text.Type != gjson.String || text.String() == "" {
 				continue
@@ -89,9 +89,6 @@ func ExtractItemFields(item gjson.Result, basePath string) []llmutils.ContentFie
 			})
 		}
 		for j, part := range item.Get("content").Array() {
-			if part.Get("type").String() != "reasoning_text" {
-				continue
-			}
 			text := part.Get("text")
 			if text.Type != gjson.String || text.String() == "" {
 				continue

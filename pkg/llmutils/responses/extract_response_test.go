@@ -79,3 +79,17 @@ func TestExtractResponsesReasoningContent(t *testing.T) {
 		{Path: "item.content.0.text", Value: "cot <EMAIL_1>"},
 	}, got)
 }
+
+// LiteLLM serving a chat model types the parts of a reasoning item
+// output_text; every part of a reasoning item is reasoning, so its text is
+// demasked whatever the type.
+func TestExtractResponsesReasoningContent_AnyPartType(t *testing.T) {
+	t.Parallel()
+	body := []byte(`{"output":[` +
+		`{"type":"reasoning","id":"rs_1","role":"assistant","content":[{"type":"output_text","text":"cot <EMAIL_1>","annotations":[]}]},` +
+		`{"type":"message","content":[{"type":"output_text","text":"ok"}]}]}`)
+	assert.Equal(t, []llmutils.ContentField{
+		{Path: "output.0.content.0.text", Value: "cot <EMAIL_1>"},
+		{Path: "output.1.content.0.text", Value: "ok"},
+	}, responses.ExtractOutputFields(body, ""))
+}

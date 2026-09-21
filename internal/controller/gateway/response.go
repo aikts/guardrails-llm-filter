@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/tidwall/sjson"
 
@@ -42,7 +43,8 @@ var hopByHopHeaders = []string{
 // (bar the outcome headers, see setTriggeredHeaders). triggered holds the
 // response headers that report the masking outcome (none when there is nothing
 // to report); they are set before the status line, so they reach the client
-// ahead of any body, streamed or not.
+// ahead of any body, streamed or not. It returns the time spent demasking —
+// the demask work only, not the wait for the upstream or the client.
 func (h *Handler) forward(
 	ctx context.Context,
 	w http.ResponseWriter,
@@ -53,13 +55,13 @@ func (h *Handler) forward(
 	streamRequested bool,
 	requestID string,
 	triggered http.Header,
-) {
+) time.Duration {
 	target := h.upstreamURL(r)
 	if target == nil {
 		logging.Error(ctx, "no upstream configured for request", nil, "path", r.URL.Path)
 		failSpan(ctx, "no upstream configured")
 		http.Error(w, "upstream not configured", http.StatusBadGateway)
-		return
+		return 0
 	}
 
 	// The request context is the client's: cancelling it (client disconnect)
@@ -69,7 +71,7 @@ func (h *Handler) forward(
 		logging.Error(ctx, "failed to build upstream request", err)
 		failSpan(ctx, "failed to build upstream request")
 		http.Error(w, "failed to build upstream request", http.StatusBadGateway)
-		return
+		return 0
 	}
 	// Never replay the request. NewRequestWithContext sets GetBody for a
 	// *bytes.Reader, and with a client Idempotency-Key / X-Idempotency-Key
@@ -104,13 +106,13 @@ func (h *Handler) forward(
 			// Client disconnected; nothing to write.
 			failUpstreamSpan(upstreamSpan, "client disconnected")
 			logging.Debug(ctx, "client disconnected before upstream response", "error", err)
-			return
+			return 0
 		}
 		failUpstreamSpan(upstreamSpan, "upstream request failed")
 		logging.Error(ctx, "upstream request failed", err, "url", target.String())
 		failSpan(ctx, "upstream request failed")
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
-		return
+		return 0
 	}
 	endUpstreamSpan(upstreamSpan, resp.StatusCode)
 	defer func() { _ = resp.Body.Close() }()
@@ -126,7 +128,7 @@ func (h *Handler) forward(
 	if factory == nil {
 		w.WriteHeader(resp.StatusCode)
 		relay(w, resp.Body)
-		return
+		return 0
 	}
 
 	// Demasking will change the body length; drop the upstream Content-Length.
@@ -152,16 +154,17 @@ func (h *Handler) forward(
 	if isSSE {
 		w.WriteHeader(resp.StatusCode)
 		_, sseSpan := tracer.Start(ctx, spanDemaskSSE)
-		texts := demaskSSE(ctx, w, resp.Body, factory, format, capture)
+		texts, spent := demaskSSE(ctx, w, resp.Body, factory, format, capture)
 		sseSpan.End()
 		h.recordMaskedResponse(requestID, texts)
-		return
+		return spent
 	}
 
 	_, fullSpan := tracer.Start(ctx, spanDemask)
-	texts := demaskFull(ctx, w, resp, factory, format, capture)
+	texts, spent := demaskFull(ctx, w, resp, factory, format, capture)
 	fullSpan.End()
 	h.recordMaskedResponse(requestID, texts)
+	return spent
 }
 
 // recordMaskedResponse enriches the audit record with the masked model response
@@ -178,18 +181,19 @@ func (h *Handler) recordMaskedResponse(requestID string, texts []string) {
 // and writes it. The body is handled uniformly regardless of status code (an
 // error body simply matches no output fields).
 // demaskFull returns the masked (pre-demask) text content of the response when
-// capture is set (for the audit trail), else nil.
-func demaskFull(ctx context.Context, w http.ResponseWriter, resp *http.Response, factory *demask.Factory, format models.APIFormat, capture bool) []string {
+// capture is set (for the audit trail), else nil, and the time spent
+// demasking, which it also records in demask_duration_seconds.
+func demaskFull(ctx context.Context, w http.ResponseWriter, resp *http.Response, factory *demask.Factory, format models.APIFormat, capture bool) ([]string, time.Duration) {
 	full, err := io.ReadAll(resp.Body)
 	if err != nil {
 		if ctx.Err() != nil {
-			return nil
+			return nil, 0
 		}
 		logging.Error(ctx, "failed to read upstream response body", err)
 		failSpan(ctx, "unreadable upstream response")
 		// Headers not yet written; surface a gateway error.
 		http.Error(w, "failed to read upstream response", http.StatusBadGateway)
-		return nil
+		return nil, 0
 	}
 
 	var fields []llmutils.ContentField
@@ -210,7 +214,10 @@ func demaskFull(ctx context.Context, w http.ResponseWriter, resp *http.Response,
 
 	maskedResponseTexts := collectMaskedResponseTexts(capture, fields)
 
+	demaskStart := time.Now()
 	patched := demaskAndPatchFields(ctx, full, fields, factory)
+	spent := time.Since(demaskStart)
+	metrics.ObserveDemaskDuration(spent)
 
 	w.Header().Set(contentTypeHeader, resp.Header.Get(contentTypeHeader))
 	w.Header().Set("Content-Length", strconv.Itoa(len(patched)))
@@ -218,7 +225,7 @@ func demaskFull(ctx context.Context, w http.ResponseWriter, resp *http.Response,
 	if _, err := w.Write(patched); err != nil {
 		logging.Debug(ctx, "failed to write demasked response body", "error", err)
 	}
-	return maskedResponseTexts
+	return maskedResponseTexts, spent
 }
 
 // collectMaskedResponseTexts gathers the masked (placeholder-bearing) text
@@ -288,8 +295,10 @@ func demaskAndPatchFields(ctx context.Context, body []byte, fields []llmutils.Co
 // demasking frame-by-frame and flushing after every write so the client sees
 // tokens as they arrive. Fail-open: a processor error forwards the raw chunk.
 // demaskSSE returns the accumulated masked (pre-demask) response text when
-// capture is set (for the audit trail), else nil.
-func demaskSSE(ctx context.Context, w http.ResponseWriter, upstream io.Reader, factory *demask.Factory, format models.APIFormat, capture bool) []string {
+// capture is set (for the audit trail), else nil, and the time spent
+// demasking: the sum over the chunks, each also recorded in
+// sse_chunk_demask_duration_seconds.
+func demaskSSE(ctx context.Context, w http.ResponseWriter, upstream io.Reader, factory *demask.Factory, format models.APIFormat, capture bool) ([]string, time.Duration) {
 	proc := sseproc.NewForFormat(format,
 		func() common.Demasker { return factory.Demasker() },
 		func() common.Demasker { return factory.JSONDemasker() },
@@ -297,13 +306,18 @@ func demaskSSE(ctx context.Context, w http.ResponseWriter, upstream io.Reader, f
 
 	fw := newFlushWriter(w)
 	buf := make([]byte, 32*1024)
+	var spent time.Duration
 	for {
 		n, readErr := upstream.Read(buf)
 		eos := errors.Is(readErr, io.EOF)
 		if n > 0 || eos {
 			// Copy: the SSE processor may retain the slice across calls.
 			chunk := append([]byte(nil), buf[:n]...)
+			chunkStart := time.Now()
 			out, procErr := proc.ProcessChunk(ctx, chunk, eos)
+			chunkSpent := time.Since(chunkStart)
+			metrics.ObserveSSEChunkDemaskDuration(chunkSpent)
+			spent += chunkSpent
 			if procErr != nil {
 				metrics.IncDemaskSSEFailed()
 				logging.Warn(ctx, "SSE demask failed, forwarding chunk unchanged (fail-open)", "error", procErr)
@@ -312,21 +326,21 @@ func demaskSSE(ctx context.Context, w http.ResponseWriter, upstream io.Reader, f
 			if len(out) > 0 {
 				if _, werr := fw.Write(out); werr != nil {
 					logging.Debug(ctx, "failed to write SSE chunk to client", "error", werr)
-					return nil // stream interrupted; don't record partial text
+					return nil, spent // stream interrupted; don't record partial text
 				}
 			}
 		}
 		if readErr != nil {
 			if !eos && ctx.Err() == nil {
 				logging.Warn(ctx, "error reading upstream SSE stream", "error", readErr)
-				return nil // truncated stream; don't record partial text
+				return nil, spent // truncated stream; don't record partial text
 			}
 			// Clean end-of-stream (or client disconnect): return whatever the
 			// processor accumulated (nil unless capture was requested).
 			if src, ok := proc.(common.MaskedResponseTextSource); ok {
-				return src.MaskedResponseText()
+				return src.MaskedResponseText(), spent
 			}
-			return nil
+			return nil, spent
 		}
 	}
 }

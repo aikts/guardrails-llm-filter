@@ -72,3 +72,25 @@ func TestClassifyFrame(t *testing.T) {
 		})
 	}
 }
+
+func TestBuildEventFrame(t *testing.T) {
+	t.Parallel()
+
+	assert.Equal(t, "event: response.completed\ndata: {}\n\n",
+		string(BuildEventFrame([]byte("response.completed"), []byte("{}"))))
+	assert.Equal(t, "data: {}\n\n", string(BuildEventFrame(nil, []byte("{}"))),
+		"a frame without a name gets no event line, not an empty one")
+}
+
+func TestEventNaming(t *testing.T) {
+	t.Parallel()
+
+	var n EventNaming
+	assert.Equal(t, []byte("x"), n.Name("x"), "named until an upstream frame says otherwise")
+
+	n.Observe(ClassifyFrame([]byte("data: {}\n\n")))
+	assert.Nil(t, n.Name("x"), "an unnamed stream gets unnamed made-up frames")
+
+	n.Observe(ClassifyFrame([]byte("event: y\ndata: {}\n\n")))
+	assert.Equal(t, []byte("x"), n.Name("x"))
+}

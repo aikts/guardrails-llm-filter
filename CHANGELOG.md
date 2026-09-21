@@ -76,6 +76,53 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- The duration histograms `mask_duration_seconds`, `demask_duration_seconds`,
+  `sse_chunk_demask_duration_seconds` and `pipeline_duration_seconds` are now
+  recorded; nothing observed them, so dashboards built on them stayed empty
+  and the `GuardrailsPipelineSlow` alert could never fire. `mask` times the
+  request masking, `demask` the demasking of a full body (not reading it),
+  `sse_chunk_demask` each upstream read of a stream through the SSE
+  processor, and `pipeline` — once per request that reached masking — the
+  sum of the two phases: the filter's own work, without the wait for the
+  upstream or the client.
+- `/v1/responses` and `/v1/messages` streams: a frame the processor rewrites
+  no longer goes out with an empty `event: ` line. When the upstream sends
+  unnamed events (LiteLLM on `/v1/responses` sends data lines only), the
+  rebuilt `output_text.done`, `content_part.done`, `output_item.done` and
+  `response.completed` frames got `event: ` with no name, which a client
+  dispatching on the event name does not take for a missing line. The event
+  line is now left out when the name is empty, and a frame made up on flush
+  follows the stream: unnamed in an unnamed stream, so a client listening for
+  the default `message` event still gets it.
+- `/v1/responses` streams: reasoning summaries are demasked.
+  `response.reasoning_summary_text.delta`, `.done` and
+  `response.reasoning_summary_part.done` were relayed verbatim on the
+  assumption that a summary cannot hold placeholders — but a summary
+  paraphrases the prompt, and LiteLLM streams a chat model's
+  `reasoning_content` on `/v1/responses` as exactly these events. They are
+  now handled like `reasoning_text`: a streaming demasker per
+  (`output_index`, `summary_index`), flushed on the done event, and a fresh
+  demask of the full text the done events repeat. The snapshots LiteLLM
+  sends for such a model are demasked too: a `content_part.done` part that
+  carries the reasoning as `part.reasoning`, and a reasoning output item
+  whose content parts are typed `output_text` (in `response.completed` and in
+  full, non-streamed responses) — every part of a reasoning item is now
+  demasked whatever its type.
+- `/v1/chat/completions` streams: a reasoning model's chain-of-thought no
+  longer reaches the client with placeholders in it. The SSE processor knew
+  only `delta.reasoning`, so a delta carrying `delta.reasoning_content`
+  (DeepSeek, LiteLLM) or OpenRouter's `delta.reasoning_details` was relayed
+  verbatim, placeholders included — and when the same delta also had
+  `reasoning` or `content`, those fields were dropped from the rebuilt frame.
+  Both are now demasked with their own streaming demaskers (`text`/`summary`
+  of a `reasoning_details` entry; its signature and encrypted data pass
+  through), and the reasoning fields of one delta go out in one frame, so a
+  client reading `reasoning_content or reasoning` does not show the text
+  twice. A signed `reasoning_details` entry releases the text held for it
+  first. Non-streamed responses now demask `reasoning_details` too, and the
+  copies of the reasoning LiteLLM keeps under
+  `message.provider_specific_fields` (OpenRouter's `reasoning` and
+  `reasoning_details`), which reached the client with placeholders.
 - A request body that repeats a JSON object key no longer slips past masking.
   The extractors read the first occurrence of a key (gjson), while typical
   upstreams keep the last one, so
