@@ -8,14 +8,16 @@ import (
 type fieldType string
 
 const (
-	fieldOutputText    fieldType = "output_text"
-	fieldFunctionArgs  fieldType = "function_args"
-	fieldReasoningText fieldType = "reasoning_text"
+	fieldOutputText       fieldType = "output_text"
+	fieldFunctionArgs     fieldType = "function_args"
+	fieldReasoningText    fieldType = "reasoning_text"
+	fieldReasoningSummary fieldType = "reasoning_summary"
 )
 
 // demaskerKey uniquely identifies one Demasker instance: per output item,
 // per content part, per field. output_text and reasoning_text deltas carry both
-// output_index and content_index; function_call arguments carry only
+// output_index and content_index; reasoning summary deltas carry output_index
+// and summary_index, kept in contentIndex; function_call arguments carry only
 // output_index (their contentIndex is always 0). The fields never share a
 // demasker — they have different flush disciplines.
 type demaskerKey struct {

@@ -154,10 +154,10 @@ func (p *Processor) processFrame(ctx context.Context, frame []byte) {
 }
 
 // handleEventFrame dispatches on the payload's "type" field (never trust
-// the event: line alone). Unknown events pass through for forward compat:
-// refusal/reasoning-summary/annotation deltas carry model-generated text
-// where placeholders cannot appear mid-stream, and new event types must not
-// be swallowed.
+// the event: line alone). Unknown events pass through unchanged for forward
+// compat — new event types must not be swallowed — so an event that carries
+// model text must be handled here, or its placeholders reach the client.
+// Still relayed as is: refusal and annotation events.
 func (p *Processor) handleEventFrame(ctx context.Context, pf common.ParsedFrame) {
 	switch gjson.GetBytes(pf.Data, "type").String() {
 	case "response.output_text.delta":
@@ -173,6 +173,16 @@ func (p *Processor) handleEventFrame(ctx context.Context, pf common.ParsedFrame)
 	case "response.reasoning_text.done":
 		p.handleReasoningTextDone(ctx, pf)
 	case "response.reasoning_part.done":
+		// Same shape as content_part.done (part.text snapshot).
+		p.handleContentPartDone(ctx, pf)
+	case "response.reasoning_summary_text.delta":
+		// The reasoning summary paraphrases the prompt as readily as the
+		// reasoning itself; LiteLLM also streams a chat model's
+		// reasoning_content as these events.
+		p.handleDelta(ctx, pf, keyFromPayload(pf.Data, fieldReasoningSummary))
+	case "response.reasoning_summary_text.done":
+		p.handleFieldTextDone(ctx, pf, fieldReasoningSummary)
+	case "response.reasoning_summary_part.done":
 		// Same shape as content_part.done (part.text snapshot).
 		p.handleContentPartDone(ctx, pf)
 	case "response.function_call_arguments.delta":
@@ -245,8 +255,11 @@ func keyFromPayload(data []byte, field fieldType) demaskerKey {
 		outputIndex: int(gjson.GetBytes(data, "output_index").Int()),
 		field:       field,
 	}
-	if field == fieldOutputText || field == fieldReasoningText {
+	switch field {
+	case fieldOutputText, fieldReasoningText:
 		key.contentIndex = int(gjson.GetBytes(data, "content_index").Int())
+	case fieldReasoningSummary:
+		key.contentIndex = int(gjson.GetBytes(data, "summary_index").Int())
 	}
 	return key
 }
@@ -346,24 +359,40 @@ func (p *Processor) handleFieldTextDone(ctx context.Context, pf common.ParsedFra
 	p.emitPatchedFrame(ctx, pf, "text", demasked)
 }
 
+// contentPartTextPaths are the part fields a *_part.done snapshot carries
+// text in: "text" per the Responses API, "reasoning" in the reasoning_text
+// part LiteLLM sends when it serves a chat model.
+var contentPartTextPaths = []string{"part.text", "part.reasoning"}
+
 // handleContentPartDone demasks the full text repeated in a
 // response.content_part.done snapshot. The streaming output_text deltas were
 // already demasked, but this event re-sends the entire accumulated part text
 // (part.text) — without a fresh one-shot demask its placeholders leak to the
 // client. Mirrors handleTextDone; the emitted part carries the demasked text.
 func (p *Processor) handleContentPartDone(ctx context.Context, pf common.ParsedFrame) {
-	text := gjson.GetBytes(pf.Data, "part.text")
-	if !text.Exists() || text.String() == "" {
+	patched := pf.Data
+	changed := false
+	for _, path := range contentPartTextPaths {
+		text := gjson.GetBytes(patched, path)
+		if text.Type != gjson.String || text.String() == "" {
+			continue
+		}
+		demasked, err := p.newDemasker().DemaskChunk(ctx, text.String(), true)
+		if err != nil {
+			metrics.IncDemaskSSEFailed()
+			continue
+		}
+		if next, err := sjson.SetBytes(patched, path, demasked); err == nil {
+			patched, changed = next, true
+		} else {
+			logging.Error(ctx, "Failed to patch Responses SSE frame", err, "path", path)
+		}
+	}
+	if !changed {
 		p.forwardEventFrame(pf)
 		return
 	}
-	demasked, err := p.newDemasker().DemaskChunk(ctx, text.String(), true)
-	if err != nil {
-		metrics.IncDemaskSSEFailed()
-		p.forwardEventFrame(pf)
-		return
-	}
-	p.emitPatchedFrame(ctx, pf, "part.text", demasked)
+	p.emitEventData(pf, patched)
 }
 
 // handleArgsDone mirrors handleTextDone for function_call arguments: the
@@ -477,6 +506,8 @@ func (p *Processor) emitSyntheticDeltaFrame(ctx context.Context, key demaskerKey
 		eventType = "response.function_call_arguments.delta"
 	case fieldReasoningText:
 		eventType = "response.reasoning_text.delta"
+	case fieldReasoningSummary:
+		eventType = "response.reasoning_summary_text.delta"
 	}
 
 	// The real Responses API always sends item_id and sequence_number on delta
@@ -494,8 +525,11 @@ func (p *Processor) emitSyntheticDeltaFrame(ctx context.Context, key demaskerKey
 	if id := p.itemIDs[key]; id != "" {
 		payload["item_id"] = id
 	}
-	if key.field == fieldOutputText || key.field == fieldReasoningText {
+	switch key.field {
+	case fieldOutputText, fieldReasoningText:
 		payload["content_index"] = key.contentIndex
+	case fieldReasoningSummary:
+		payload["summary_index"] = key.contentIndex
 	}
 
 	data, err := common.MarshalNoEscape(payload)

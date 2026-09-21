@@ -387,6 +387,31 @@ func TestProcessor_ThinkingBlock_DemaskedAndSignaturePassthrough(t *testing.T) {
 	assert.True(t, sigFound, "signature delta should pass through")
 }
 
+// A placeholder cut across thinking deltas is held until the block ends and
+// released demasked, still as thinking — never relayed in pieces.
+func TestProcessor_ThinkingBlock_SplitPlaceholder(t *testing.T) {
+	p := New(bufferingReplacing("<NAME_1>", "Alice"))
+
+	body := frame("content_block_start", blockStart(0, "thinking")) +
+		frame("content_block_delta", thinkingDelta(0, "Considering <NA")) +
+		frame("content_block_delta", thinkingDelta(0, "ME_1>'s request")) +
+		frame("content_block_delta", signatureDelta(0, "sig")) +
+		frame("content_block_stop", blockStop(0)) +
+		doneFrame()
+
+	out := processAll(t, p, []string{body})
+	assert.NotContains(t, string(out), "<NA")
+	assert.NotContains(t, string(out), "ME_1>")
+
+	var thinking strings.Builder
+	for _, pld := range dataPayloads(t, out) {
+		if gjson.Get(pld, "delta.type").String() == "thinking_delta" {
+			thinking.WriteString(gjson.Get(pld, "delta.thinking").String())
+		}
+	}
+	assert.Equal(t, "Considering Alice's request", thinking.String())
+}
+
 func TestProcessor_PartialFrameAcrossChunks(t *testing.T) {
 	p := New(passthrough())
 

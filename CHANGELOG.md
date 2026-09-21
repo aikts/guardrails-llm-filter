@@ -76,6 +76,20 @@ adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ### Fixed
 
+- `/v1/responses` streams: reasoning summaries are demasked.
+  `response.reasoning_summary_text.delta`, `.done` and
+  `response.reasoning_summary_part.done` were relayed verbatim on the
+  assumption that a summary cannot hold placeholders — but a summary
+  paraphrases the prompt, and LiteLLM streams a chat model's
+  `reasoning_content` on `/v1/responses` as exactly these events. They are
+  now handled like `reasoning_text`: a streaming demasker per
+  (`output_index`, `summary_index`), flushed on the done event, and a fresh
+  demask of the full text the done events repeat. The snapshots LiteLLM
+  sends for such a model are demasked too: a `content_part.done` part that
+  carries the reasoning as `part.reasoning`, and a reasoning output item
+  whose content parts are typed `output_text` (in `response.completed` and in
+  full, non-streamed responses) — every part of a reasoning item is now
+  demasked whatever its type.
 - `/v1/chat/completions` streams: a reasoning model's chain-of-thought no
   longer reaches the client with placeholders in it. The SSE processor knew
   only `delta.reasoning`, so a delta carrying `delta.reasoning_content`
