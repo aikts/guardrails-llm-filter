@@ -1,7 +1,7 @@
 name: Release
 
 # Fork release. A tag v<upstream tag>-kts.<n> (e.g. v0.1.2.1-kts.1) pushed on
-# the kts/<upstream tag> branch publishes
+# the kts branch, <upstream tag> being the latest one merged into it, publishes
 # ghcr.io/aikts/guardrails-llm-filter:<that tag>. Upstream tags (plain v*)
 # are not released from the fork.
 on:
